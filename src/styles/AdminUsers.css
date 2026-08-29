@@ -1,0 +1,201 @@
+.admin-users-page {
+  min-height: 100vh;
+  padding: 40px 20px;
+  background: #f7f5ef;
+}
+
+.admin-users-container {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+/* HEADER */
+
+.admin-users-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 30px;
+  margin-bottom: 35px;
+}
+
+.admin-users-eyebrow {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: #24613f;
+}
+
+.admin-users-header h1 {
+  margin: 0 0 10px;
+  font-size: 36px;
+  color: #203a29;
+}
+
+.admin-users-header p {
+  margin: 0;
+  color: #666;
+}
+
+/* BACK BUTTON */
+
+.admin-back-button {
+  padding: 12px 18px;
+  border: none;
+  border-radius: 8px;
+  background: #24613f;
+  color: white;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.admin-back-button:hover {
+  opacity: 0.9;
+}
+
+/* COUNT */
+
+.users-count {
+  margin-bottom: 18px;
+  color: #555;
+}
+
+/* USER CARD */
+
+.admin-user-card {
+  margin-bottom: 22px;
+  padding: 25px;
+  background: white;
+  border: 1px solid #e1ded5;
+  border-radius: 14px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
+}
+
+/* USER TOP */
+
+.admin-user-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #eee;
+}
+
+.user-label {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #888;
+}
+
+.admin-user-top h2 {
+  margin: 0 0 5px;
+  color: #203a29;
+}
+
+.user-email {
+  margin: 0;
+  color: #777;
+}
+
+/* ROLE */
+
+.user-role {
+  padding: 7px 13px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.user-role-admin {
+  background: #dff2e5;
+  color: #24613f;
+}
+
+.user-role-customer {
+  background: #f1f1f1;
+  color: #555;
+}
+
+/* USER INFORMATION */
+
+.admin-user-info {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+  padding: 20px 0 0;
+}
+
+.admin-user-info p {
+  margin: 0;
+  font-weight: 600;
+  color: #333;
+}
+
+.user-id {
+  word-break: break-all;
+  font-size: 13px;
+  color: #666 !important;
+}
+
+/* EMPTY */
+
+.admin-users-empty {
+  padding: 70px 20px;
+  text-align: center;
+  background: white;
+  border-radius: 14px;
+}
+
+.admin-users-empty .empty-icon {
+  font-size: 50px;
+  margin-bottom: 15px;
+}
+
+.admin-users-empty h2 {
+  margin-bottom: 8px;
+  color: #203a29;
+}
+
+.admin-users-empty p {
+  color: #777;
+}
+
+/* ERROR */
+
+.admin-users-error {
+  padding: 18px;
+  border-radius: 8px;
+  background: #f8d7da;
+  color: #842029;
+}
+
+/* LOADING */
+
+.admin-users-loading {
+  padding: 50px;
+  text-align: center;
+  color: #555;
+}
+
+/* MOBILE */
+
+@media (max-width: 700px) {
+  .admin-users-header {
+    flex-direction: column;
+  }
+
+  .admin-user-top {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .admin-user-info {
+    grid-template-columns: 1fr;
+  }
+}

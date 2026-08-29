@@ -1,0 +1,272 @@
+/* =========================
+   MY REVIEWS PAGE
+   ========================= */
+
+.my-reviews-page {
+  min-height: 100vh;
+  padding: 60px 20px;
+  background: #f7f4ed;
+}
+
+.reviews-container {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+/* =========================
+   HEADER
+   ========================= */
+
+.reviews-header {
+  text-align: center;
+  margin-bottom: 40px;
+}
+
+.reviews-eyebrow {
+  color: #24613d;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  margin-bottom: 10px;
+}
+
+.reviews-header h1 {
+  margin: 0 0 12px;
+  color: #24452f;
+  font-size: 40px;
+}
+
+.reviews-header p {
+  color: #666;
+  font-size: 16px;
+}
+
+/* =========================
+   REVIEW FORM
+   ========================= */
+
+.review-form-section {
+  background: white;
+  border: 1px solid #e1ddd3;
+  border-radius: 16px;
+  padding: 30px;
+  margin-bottom: 35px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.05);
+}
+
+.review-form-section h2 {
+  color: #24452f;
+  margin-top: 0;
+  margin-bottom: 25px;
+  font-size: 24px;
+}
+
+.review-form-group {
+  margin-bottom: 20px;
+}
+
+.review-form-group label {
+  display: block;
+  margin-bottom: 8px;
+  color: #333;
+  font-weight: 600;
+}
+
+.review-form-group select,
+.review-form-group textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border: 1px solid #d7d2c8;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 15px;
+  background: white;
+}
+
+.review-form-group select:focus,
+.review-form-group textarea:focus {
+  outline: none;
+  border-color: #24613d;
+}
+
+.review-form-group textarea {
+  resize: vertical;
+}
+
+/* =========================
+   MESSAGE
+   ========================= */
+
+.review-message {
+  padding: 12px 15px;
+  margin-bottom: 20px;
+  border-radius: 8px;
+  background: #e8f5e9;
+  color: #24613d;
+  font-weight: 600;
+}
+
+/* =========================
+   SUBMIT BUTTON
+   ========================= */
+
+.submit-review-button {
+  width: 100%;
+  padding: 13px 20px;
+  border: none;
+  border-radius: 8px;
+  background: #24613d;
+  color: white;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.submit-review-button:hover {
+  background: #1c4f31;
+}
+
+.submit-review-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* =========================
+   EXISTING REVIEWS
+   ========================= */
+
+.existing-reviews {
+  margin-top: 30px;
+}
+
+.existing-reviews > h2 {
+  color: #24452f;
+  margin-bottom: 20px;
+}
+
+/* =========================
+   REVIEW LIST
+   ========================= */
+
+.reviews-list {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.review-card {
+  background: white;
+  border: 1px solid #e1ddd3;
+  border-radius: 14px;
+  padding: 22px;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.04);
+}
+
+.review-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 15px;
+  margin-bottom: 15px;
+}
+
+.review-card-header strong {
+  font-size: 20px;
+  letter-spacing: 2px;
+}
+
+.review-card-header span {
+  padding: 6px 12px;
+  border-radius: 20px;
+  background: #fff3cd;
+  color: #856404;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.review-comment {
+  color: #444;
+  line-height: 1.6;
+  margin: 0 0 12px;
+}
+
+.review-card small {
+  color: #777;
+}
+
+/* =========================
+   NO REVIEWS
+   ========================= */
+
+.no-reviews {
+  background: white;
+  border: 1px solid #e1ddd3;
+  border-radius: 14px;
+  padding: 35px;
+  text-align: center;
+}
+
+.no-reviews h3 {
+  color: #24452f;
+  margin-top: 0;
+}
+
+.no-reviews p {
+  color: #666;
+}
+
+/* =========================
+   ACTIONS
+   ========================= */
+
+.reviews-actions {
+  margin-top: 30px;
+  text-align: center;
+}
+
+.reviews-actions button {
+  padding: 12px 22px;
+  border: 1px solid #24452f;
+  border-radius: 8px;
+  background: white;
+  color: #24452f;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.reviews-actions button:hover {
+  background: #f1eee7;
+}
+
+/* =========================
+   MOBILE
+   ========================= */
+
+@media (max-width: 600px) {
+  .my-reviews-page {
+    padding: 35px 15px;
+  }
+
+  .reviews-header h1 {
+    font-size: 30px;
+  }
+
+  .review-form-section {
+    padding: 22px;
+  }
+
+  .review-card {
+    padding: 18px;
+  }
+
+  .review-card-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .reviews-actions button {
+    width: 100%;
+  }
+}

@@ -1,0 +1,138 @@
+.admin-dashboard {
+  min-height: 100vh;
+  background: #f7f4ed;
+  padding-bottom: 60px;
+}
+
+/* HEADER */
+
+.admin-header {
+  background: white;
+  border-bottom: 1px solid #e1ddd3;
+  padding: 18px 40px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.admin-brand {
+  color: #24452f;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.admin-user {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  color: #555;
+}
+
+.admin-user button {
+  padding: 9px 16px;
+  border: none;
+  border-radius: 7px;
+  background: #24452f;
+  color: white;
+  cursor: pointer;
+}
+
+.admin-user button:hover {
+  background: #1c3a27;
+}
+
+/* WELCOME */
+
+.admin-welcome {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 55px 20px 30px;
+}
+
+.admin-eyebrow {
+  color: #24613d;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+
+.admin-welcome h1 {
+  color: #24452f;
+  font-size: 40px;
+  margin: 8px 0 12px;
+}
+
+.admin-welcome p {
+  color: #666;
+}
+
+/* CARDS */
+
+.admin-cards {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+}
+
+.admin-card {
+  background: white;
+  border: 1px solid #e1ddd3;
+  border-radius: 15px;
+  padding: 25px;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.admin-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.08);
+}
+
+.admin-card-icon {
+  font-size: 34px;
+  margin-bottom: 15px;
+}
+
+.admin-card h2 {
+  color: #24452f;
+  margin: 0 0 10px;
+  font-size: 21px;
+}
+
+.admin-card p {
+  color: #666;
+  line-height: 1.5;
+}
+
+/* MOBILE */
+
+@media (max-width: 800px) {
+  .admin-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 550px) {
+  .admin-header {
+    padding: 15px 20px;
+    flex-direction: column;
+    gap: 15px;
+    align-items: flex-start;
+  }
+
+  .admin-user {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .admin-welcome h1 {
+    font-size: 32px;
+  }
+
+  .admin-cards {
+    grid-template-columns: 1fr;
+  }
+}
