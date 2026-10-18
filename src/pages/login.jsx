@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { doc, getDoc } from "firebase/firestore";
 
 import "../styles/Login.css";
@@ -11,18 +11,16 @@ function Login() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
 
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState("");
-
   const [isLoading, setIsLoading] = useState(false);
 
-  // =========================================
-  // FIREBASE ERROR HANDLING
-  // =========================================
   const getFriendlyErrorMessage = (errorCode) => {
     switch (errorCode) {
       case "auth/invalid-credential":
+      case "auth/wrong-password":
         return "Incorrect email or password. Please try again.";
 
       case "auth/invalid-email":
@@ -30,9 +28,6 @@ function Login() {
 
       case "auth/user-not-found":
         return "No account was found with this email address.";
-
-      case "auth/wrong-password":
-        return "Incorrect email or password. Please try again.";
 
       case "auth/too-many-requests":
         return "Too many login attempts. Please try again later.";
@@ -48,70 +43,40 @@ function Login() {
     }
   };
 
-  // =========================================
-  // DISPLAY MESSAGE
-  // =========================================
   const showMessage = (text, type = "error") => {
     setMessage(text);
     setMessageType(type);
   };
 
-  // =========================================
-  // LOGIN
-  // =========================================
   const handleLogin = async (event) => {
     event.preventDefault();
 
-    if (isLoading) {
-      return;
-    }
+    if (isLoading) return;
 
     setMessage("");
     setMessageType("");
 
     const cleanEmail = email.trim().toLowerCase();
 
-    // Validate fields
     if (!cleanEmail || !password) {
-      showMessage(
-        "Please enter both your email address and password."
-      );
+      showMessage("Please enter both your email address and password.");
       return;
     }
 
     try {
       setIsLoading(true);
 
-      // -----------------------------------------
-      // 1. FIREBASE AUTHENTICATION
-      // -----------------------------------------
       await login(cleanEmail, password);
 
-      // -----------------------------------------
-      // 2. GET CURRENT AUTHENTICATED USER
-      // -----------------------------------------
       const currentUser = auth.currentUser;
 
       if (!currentUser) {
-        throw new Error(
-          "Unable to retrieve the authenticated user."
-        );
+        throw new Error("Unable to retrieve the authenticated user.");
       }
 
-      // -----------------------------------------
-      // 3. GET USER PROFILE FROM FIRESTORE
-      // -----------------------------------------
-      const userRef = doc(
-        db,
-        "users",
-        currentUser.uid
-      );
-
+      const userRef = doc(db, "users", currentUser.uid);
       const userSnapshot = await getDoc(userRef);
 
-      // -----------------------------------------
-      // 4. CHECK IF USER PROFILE EXISTS
-      // -----------------------------------------
       if (!userSnapshot.exists()) {
         showMessage(
           "Your account was authenticated, but your user profile could not be found."
@@ -119,190 +84,186 @@ function Login() {
         return;
       }
 
-      // -----------------------------------------
-      // 5. GET USER DATA
-      // -----------------------------------------
       const userData = userSnapshot.data();
-
-      // -----------------------------------------
-      // 6. CHECK USER ROLE
-      // -----------------------------------------
       const userRole = userData.role;
 
       if (userRole === "admin") {
-        // Admin account
         navigate("/admin", { replace: true });
         return;
       }
 
       if (userRole === "voter") {
-        // Keep this only if your current project
-        // still uses the voting system.
         navigate("/voter", { replace: true });
         return;
       }
 
-      // -----------------------------------------
-      // 7. CUSTOMER ACCOUNT
-      // -----------------------------------------
       if (userRole === "customer") {
         navigate("/customer", { replace: true });
         return;
       }
 
-      // -----------------------------------------
-      // 8. UNKNOWN ROLE
-      // -----------------------------------------
       showMessage(
         "Your account does not have a valid user role. Please contact the administrator."
       );
     } catch (error) {
       console.error("Login error:", error);
-
-      showMessage(
-        getFriendlyErrorMessage(error?.code)
-      );
+      showMessage(getFriendlyErrorMessage(error?.code));
     } finally {
       setIsLoading(false);
     }
   };
 
-  // =========================================
-  // COMPONENT
-  // =========================================
   return (
     <main className="login-page">
-      <section className="login-layout">
+      <Link
+        to="/"
+        className="login-brand"
+        aria-label="Cactus Cafe home"
+      >
+        <span className="login-brand-mark">C</span>
+        <span>Cactus Cafe</span>
+      </Link>
 
-        {/* =====================================
-            INTRODUCTION
-        ===================================== */}
-        <div className="login-intro">
-          <p className="login-eyebrow">
-            CACTUS CAFE
-          </p>
+      <section
+        className="login-card"
+        aria-labelledby="login-title"
+      >
+        <Link
+          to="/"
+          className="login-close"
+          aria-label="Return to home"
+        >
+          ×
+        </Link>
 
-          <h1>
-            Good food is closer than you think.
+        <header className="login-header">
+          <p className="login-eyebrow">WELCOME BACK</p>
+
+          <h1 id="login-title" className="login-title">
+            Log in
           </h1>
-
-          <p>
-            Sign in to view your orders, manage your
-            reservations, save your favorites, and enjoy
-            an easier way to order from Cactus Cafe.
-          </p>
-        </div>
-
-        {/* =====================================
-            LOGIN FORM
-        ===================================== */}
-        <div className="login-container">
-
-          <p className="login-eyebrow">
-            WELCOME BACK
-          </p>
-
-          <h2 className="login-title">
-            Sign in to your account
-          </h2>
 
           <p className="login-subtitle">
             Enter your account details to continue.
           </p>
+        </header>
 
-          {/* =====================================
-              MESSAGE
-          ===================================== */}
-          {message && (
-            <div
-              className={
-                messageType === "success"
-                  ? "success-message"
-                  : "error-message"
-              }
-              role="alert"
-              aria-live="polite"
-            >
-              {message}
-            </div>
-          )}
-
-          {/* =====================================
-              FORM
-          ===================================== */}
-          <form
-            onSubmit={handleLogin}
-            className="login-form"
+        {message && (
+          <div
+            className={
+              messageType === "success"
+                ? "success-message"
+                : "error-message"
+            }
+            role="alert"
+            aria-live="polite"
           >
+            <span
+              className="message-symbol"
+              aria-hidden="true"
+            >
+              {messageType === "success" ? "✓" : "!"}
+            </span>
 
-            {/* EMAIL */}
-            <div className="form-group">
-              <label
-                htmlFor="email"
-                className="form-label"
-              >
-                Email address
-              </label>
+            <span>{message}</span>
+          </div>
+        )}
 
-              <input
-                id="email"
-                name="email"
-                type="email"
-                className="form-input"
-                placeholder="you@example.com"
-                value={email}
-                onChange={(event) =>
-                  setEmail(event.target.value)
-                }
-                autoComplete="email"
-                autoCapitalize="none"
-                spellCheck="false"
-                disabled={isLoading}
-                required
-              />
-            </div>
+        <form onSubmit={handleLogin} className="login-form">
+          <div className="form-group">
+            <label htmlFor="email" className="form-label">
+              Email address
+            </label>
 
-            {/* PASSWORD */}
-            <div className="form-group">
-              <label
-                htmlFor="password"
-                className="form-label"
-              >
-                Password
-              </label>
+            <input
+              id="email"
+              name="email"
+              type="email"
+              className="form-input"
+              placeholder="you@example.com"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              autoComplete="email"
+              autoCapitalize="none"
+              spellCheck="false"
+              disabled={isLoading}
+              required
+            />
+          </div>
 
+          <div className="form-group">
+            <label htmlFor="password" className="form-label">
+              Password
+            </label>
+
+            <div className="password-wrapper">
               <input
                 id="password"
                 name="password"
-                type="password"
-                className="form-input"
+                type={showPassword ? "text" : "password"}
+                className="form-input password-input"
                 placeholder="Enter your password"
                 value={password}
-                onChange={(event) =>
-                  setPassword(event.target.value)
-                }
+                onChange={(event) => setPassword(event.target.value)}
                 autoComplete="current-password"
                 disabled={isLoading}
                 required
               />
+
+              <button
+                type="button"
+                className="password-toggle"
+                onClick={() =>
+                  setShowPassword((current) => !current)
+                }
+                disabled={isLoading}
+                aria-label={
+                  showPassword ? "Hide password" : "Show password"
+                }
+                aria-pressed={showPassword}
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
             </div>
+          </div>
 
-            {/* LOGIN BUTTON */}
-            <button
-              type="submit"
-              className="login-button"
-              disabled={isLoading}
-              aria-busy={isLoading}
+          <div className="login-options">
+            <label className="remember-option">
+              <input type="checkbox" name="remember" />
+              <span>Remember me</span>
+            </label>
+
+            <a
+              href="mailto:support@cactuscafe.com"
+              className="help-link"
             >
-              {isLoading
-                ? "Signing in..."
-                : "Sign in"}
-            </button>
+              Need help?
+            </a>
+          </div>
 
-          </form>
+          <button
+            type="submit"
+            className="login-button"
+            disabled={isLoading}
+            aria-busy={isLoading}
+          >
+            {isLoading && (
+              <span
+                className="button-loader"
+                aria-hidden="true"
+              />
+            )}
 
-        </div>
+            {isLoading ? "Logging in..." : "Log in"}
+          </button>
+        </form>
 
+        <footer className="login-footer">
+          <p>
+            By logging in, you agree to the Cactus Cafe terms
+            and privacy policy.
+          </p>
+        </footer>
       </section>
     </main>
   );

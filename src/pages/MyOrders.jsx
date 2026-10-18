@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   collection,
   getDocs,
@@ -11,6 +11,108 @@ import { useNavigate } from "react-router-dom";
 import { auth, db } from "../services/firebase";
 import "../styles/MyOrders.css";
 
+const STATUS_STEPS = [
+  "Pending",
+  "Confirmed",
+  "Preparing",
+  "Ready",
+  "Completed",
+];
+
+const normalizeStatus = (status) => {
+  const value = String(status || "Pending")
+    .trim()
+    .toLowerCase();
+
+  if (value.includes("cancel")) return "Cancelled";
+  if (value.includes("complete")) return "Completed";
+  if (value.includes("ready")) return "Ready";
+  if (value.includes("prepar")) return "Preparing";
+  if (value.includes("confirm")) return "Confirmed";
+
+  return "Pending";
+};
+
+const getStatusClass = (status) =>
+  normalizeStatus(status).toLowerCase();
+
+const formatPrice = (price) =>
+  new Intl.NumberFormat("en-PH", {
+    style: "currency",
+    currency: "PHP",
+  }).format(Number(price) || 0);
+
+const formatDate = (timestamp) => {
+  if (!timestamp?.toDate) {
+    return "Date unavailable";
+  }
+
+  return timestamp.toDate().toLocaleString("en-PH", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+};
+
+const formatOrderType = (orderType) => {
+  const labels = {
+    takeout: "Takeout",
+    delivery: "Delivery",
+    "dine-in": "Dine-in",
+  };
+
+  return labels[orderType] || "Not specified";
+};
+
+function OrderStatusTracker({ status }) {
+  const normalizedStatus = normalizeStatus(status);
+
+  if (normalizedStatus === "Cancelled") {
+    return (
+      <div className="cancelled-message">
+        <span className="status-symbol">×</span>
+        <div>
+          <strong>Order cancelled</strong>
+          <p>This order is no longer being prepared.</p>
+        </div>
+      </div>
+    );
+  }
+
+  const currentIndex = STATUS_STEPS.indexOf(normalizedStatus);
+
+  return (
+    <div className="status-tracker" aria-label="Order progress">
+      {STATUS_STEPS.map((step, index) => {
+        const isComplete = index <= currentIndex;
+        const isCurrent = index === currentIndex;
+
+        return (
+          <div
+            className={`status-step ${
+              isComplete ? "complete" : ""
+            } ${isCurrent ? "current" : ""}`}
+            key={step}
+          >
+            <span className="status-step-dot">
+              {isComplete && index < currentIndex ? "✓" : ""}
+            </span>
+
+            <span className="status-step-label">{step}</span>
+
+            {index < STATUS_STEPS.length - 1 && (
+              <span
+                className={`status-step-line ${
+                  index < currentIndex ? "complete" : ""
+                }`}
+              />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function MyOrders() {
   const navigate = useNavigate();
 
@@ -18,10 +120,7 @@ function MyOrders() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // =========================
-  // LOAD CUSTOMER ORDERS
-  // =========================
-  const loadOrders = async (currentUser) => {
+  const loadOrders = useCallback(async (currentUser) => {
     try {
       setLoading(true);
       setError("");
@@ -33,39 +132,32 @@ function MyOrders() {
 
       const snapshot = await getDocs(ordersQuery);
 
-      const orderList = snapshot.docs.map((orderDoc) => ({
-        id: orderDoc.id,
-        ...orderDoc.data(),
-      }));
+      const orderList = snapshot.docs
+        .map((orderDoc) => ({
+          id: orderDoc.id,
+          ...orderDoc.data(),
+        }))
+        .sort((firstOrder, secondOrder) => {
+          const firstDate = firstOrder.createdAt?.toDate
+            ? firstOrder.createdAt.toDate()
+            : new Date(0);
 
-      // Newest orders first
-      orderList.sort((a, b) => {
-        const dateA = a.createdAt?.toDate
-          ? a.createdAt.toDate()
-          : new Date(0);
+          const secondDate = secondOrder.createdAt?.toDate
+            ? secondOrder.createdAt.toDate()
+            : new Date(0);
 
-        const dateB = b.createdAt?.toDate
-          ? b.createdAt.toDate()
-          : new Date(0);
-
-        return dateB - dateA;
-      });
+          return secondDate - firstDate;
+        });
 
       setOrders(orderList);
-    } catch (err) {
-      console.error("Error loading orders:", err);
-
-      setError(
-        "Unable to load your orders. Please try again."
-      );
+    } catch (loadError) {
+      console.error("Error loading orders:", loadError);
+      setError("Unable to load your orders. Please try again.");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  // =========================
-  // CHECK LOGIN
-  // =========================
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(
       auth,
@@ -80,321 +172,305 @@ function MyOrders() {
     );
 
     return () => unsubscribe();
-  }, [navigate]);
+  }, [loadOrders, navigate]);
 
-  // =========================
-  // FORMAT DATE
-  // =========================
-  const formatDate = (timestamp) => {
-    if (!timestamp?.toDate) {
-      return "Date unavailable";
+  const activeOrders = useMemo(
+    () =>
+      orders.filter((order) => {
+        const status = normalizeStatus(order.status);
+
+        return (
+          status !== "Completed" &&
+          status !== "Cancelled"
+        );
+      }),
+    [orders]
+  );
+
+  const handleRetry = () => {
+    const currentUser = auth.currentUser;
+
+    if (currentUser) {
+      loadOrders(currentUser);
     }
-
-    return timestamp.toDate().toLocaleString();
   };
 
-  // =========================
-  // FORMAT PRICE
-  // =========================
-  const formatPrice = (price) => {
-    return Number(price || 0).toFixed(2);
-  };
-
-  // =========================
-  // LOADING
-  // =========================
   if (loading) {
     return (
       <main className="my-orders-page">
         <section className="my-orders-container">
-          <p className="my-orders-loading">
-            Loading your orders...
-          </p>
+          <div className="orders-skeleton-header" />
+
+          <div className="orders-skeleton-card">
+            <div className="skeleton-line skeleton-short" />
+            <div className="skeleton-line skeleton-medium" />
+            <div className="skeleton-block" />
+          </div>
+
+          <div className="orders-skeleton-card">
+            <div className="skeleton-line skeleton-short" />
+            <div className="skeleton-line skeleton-medium" />
+            <div className="skeleton-block" />
+          </div>
         </section>
       </main>
     );
   }
 
-  // =========================
-  // PAGE
-  // =========================
   return (
     <main className="my-orders-page">
       <section className="my-orders-container">
-
-        {/* =========================
-            HEADER
-        ========================= */}
         <header className="my-orders-header">
-
           <div>
-            <p className="orders-eyebrow">
-              CACTUS CAFE
-            </p>
+            <p className="orders-eyebrow">CACTUS CAFE</p>
 
-            <h1>My Orders</h1>
+            <h1>My orders</h1>
 
             <p>
-              View your previous and current Cactus Cafe
-              orders.
+              Track your cafe orders and view your order
+              history in one place.
             </p>
           </div>
 
           <button
+            type="button"
             className="my-orders-back-button"
             onClick={() => navigate("/customer")}
           >
-            ← Back to Dashboard
+            ← Back to dashboard
           </button>
-
         </header>
 
-        {/* =========================
-            ERROR
-        ========================= */}
         {error && (
-          <div className="my-orders-error">
-            <p>{error}</p>
+          <div className="my-orders-error" role="alert">
+            <div className="error-icon">!</div>
 
-            <button
-              onClick={() => {
-                const currentUser = auth.currentUser;
+            <div>
+              <strong>We could not load your orders</strong>
+              <p>{error}</p>
+            </div>
 
-                if (currentUser) {
-                  loadOrders(currentUser);
-                }
-              }}
-            >
-              Try Again
+            <button type="button" onClick={handleRetry}>
+              Try again
             </button>
           </div>
         )}
 
-        {/* =========================
-            NO ORDERS
-        ========================= */}
         {!error && orders.length === 0 && (
           <section className="no-orders">
+            <div className="empty-icon">🛒</div>
 
-            <div className="empty-icon">
-              📦
-            </div>
+            <p className="orders-eyebrow">YOUR ORDER HISTORY</p>
 
-            <h2>No Orders Yet 🛒</h2>
+            <h2>No orders yet</h2>
 
             <p>
-              Your orders will appear here after you
-              place an order.
+              Your completed and current orders will appear here
+              after you order from Cactus Cafe.
             </p>
 
             <button
+              type="button"
               className="browse-menu-button"
               onClick={() => navigate("/menu")}
             >
-              Browse Menu
+              Browse the menu
             </button>
-
           </section>
         )}
 
-        {/* =========================
-            ORDERS
-        ========================= */}
         {!error && orders.length > 0 && (
-          <section className="orders-list">
+          <>
+            <section className="orders-overview">
+              <div className="overview-item">
+                <span>Total orders</span>
+                <strong>{orders.length}</strong>
+              </div>
 
-            <div className="orders-count">
-              Total Orders:{" "}
-              <strong>{orders.length}</strong>
-            </div>
+              <div className="overview-divider" />
 
-            {orders.map((order) => (
+              <div className="overview-item">
+                <span>Active orders</span>
+                <strong>{activeOrders.length}</strong>
+              </div>
 
-              <article
-                className="order-card"
-                key={order.id}
+              <button
+                type="button"
+                className="overview-action"
+                onClick={() => navigate("/menu")}
               >
+                Order something new <span>↗</span>
+              </button>
+            </section>
 
-                {/* =========================
-                    ORDER HEADER
-                ========================= */}
-                <div className="order-card-header">
+            <section className="orders-list">
+              <div className="orders-list-heading">
+                <div>
+                  <p className="orders-eyebrow">ORDER ACTIVITY</p>
+                  <h2>Your recent orders</h2>
+                </div>
 
-                  <div>
-                    <p className="order-label">
-                      ORDER ID
-                    </p>
+                <span className="orders-count">
+                  {orders.length}{" "}
+                  {orders.length === 1 ? "order" : "orders"}
+                </span>
+              </div>
 
-                    <strong>
-                      {order.id}
-                    </strong>
-                  </div>
+              {orders.map((order) => {
+                const normalizedStatus = normalizeStatus(
+                  order.status
+                );
 
-                  <span
-                    className={`order-status status-${String(
-                      order.status || "Pending"
-                    )
-                      .toLowerCase()
-                      .replace(/\s+/g, "-")}`}
+                return (
+                  <article
+                    className="order-card"
+                    key={order.id}
                   >
-                    {order.status || "Pending"}
-                  </span>
-
-                </div>
-
-                {/* =========================
-                    ORDER DETAILS
-                ========================= */}
-                <div className="order-details">
-
-                  <div>
-                    <p>
-                      <strong>Order Type:</strong>
-                    </p>
-
-                    <p>
-                      {order.orderType || "Not specified"}
-                    </p>
-                  </div>
-
-                  <div>
-                    <p>
-                      <strong>Date:</strong>
-                    </p>
-
-                    <p>
-                      {formatDate(order.createdAt)}
-                    </p>
-                  </div>
-
-                  <div>
-                    <p>
-                      <strong>Total:</strong>
-                    </p>
-
-                    <p className="order-total">
-                      ₱{formatPrice(order.total)}
-                    </p>
-                  </div>
-
-                </div>
-
-                {/* =========================
-                    CUSTOMER INFORMATION
-                ========================= */}
-                <div className="order-customer-info">
-
-                  <h3>Customer Information</h3>
-
-                  <p>
-                    <strong>Name:</strong>{" "}
-                    {order.customerName || "Not available"}
-                  </p>
-
-                  <p>
-                    <strong>Contact:</strong>{" "}
-                    {order.phone || "Not available"}
-                  </p>
-
-                </div>
-
-                {/* =========================
-                    DELIVERY ADDRESS
-                ========================= */}
-                {order.orderType === "delivery" &&
-                  order.address && (
-                    <div className="order-address">
-
-                      <strong>
-                        Delivery Address:
-                      </strong>
-
-                      <p>
-                        {order.address}
-                      </p>
-
-                    </div>
-                  )}
-
-                {/* =========================
-                    ORDER ITEMS
-                ========================= */}
-                <div className="order-items">
-
-                  <h3>Items</h3>
-
-                  {order.items?.map((item, index) => (
-
-                    <div
-                      className="order-item"
-                      key={`${order.id}-${index}`}
-                    >
-
+                    <div className="order-card-header">
                       <div>
-                        <strong>
-                          {item.name || "Item"}
-                        </strong>
+                        <p className="order-label">ORDER</p>
 
-                        <span>
-                          {item.quantity || 0} × ₱
-                          {formatPrice(item.price)}
-                        </span>
+                        <h3 title={order.id}>
+                          #{order.id.slice(0, 8).toUpperCase()}
+                        </h3>
+
+                        <p className="order-date">
+                          {formatDate(order.createdAt)}
+                        </p>
                       </div>
 
-                      <strong>
-                        ₱
-                        {formatPrice(
-                          item.subtotal ??
-                            Number(item.price || 0) *
-                              Number(item.quantity || 0)
-                        )}
-                      </strong>
-
+                      <span
+                        className={`order-status status-${getStatusClass(
+                          order.status
+                        )}`}
+                      >
+                        <span className="status-indicator" />
+                        {normalizedStatus}
+                      </span>
                     </div>
 
-                  ))}
+                    <OrderStatusTracker
+                      status={order.status}
+                    />
 
-                </div>
+                    <div className="order-summary-grid">
+                      <div>
+                        <span>Order type</span>
+                        <strong>
+                          {formatOrderType(order.orderType)}
+                        </strong>
+                      </div>
 
-                {/* =========================
-                    NOTES
-                ========================= */}
-                {order.notes && (
-                  <div className="order-notes">
+                      <div>
+                        <span>Items</span>
+                        <strong>
+                          {order.items?.reduce(
+                            (total, item) =>
+                              total +
+                              Number(item.quantity || 0),
+                            0
+                          ) || 0}
+                        </strong>
+                      </div>
 
-                    <strong>
-                      Order Notes:
-                    </strong>
+                      <div>
+                        <span>Total</span>
+                        <strong className="order-total">
+                          {formatPrice(order.total)}
+                        </strong>
+                      </div>
+                    </div>
 
-                    <p>
-                      {order.notes}
-                    </p>
+                    <details className="order-details">
+                      <summary>View order details</summary>
 
-                  </div>
-                )}
+                      <div className="details-content">
+                        <div className="details-section">
+                          <h4>Items</h4>
 
-                {/* =========================
-                    TOTAL
-                ========================= */}
-                <div className="order-card-total">
+                          <div className="order-items">
+                            {order.items?.map((item, index) => (
+                              <div
+                                className="order-item"
+                                key={`${order.id}-${index}`}
+                              >
+                                <div>
+                                  <strong>
+                                    {item.name || "Item"}
+                                  </strong>
 
-                  <span>
-                    Order Total
-                  </span>
+                                  <span>
+                                    {item.quantity || 0} ×{" "}
+                                    {formatPrice(item.price)}
+                                  </span>
+                                </div>
 
-                  <strong>
-                    ₱{formatPrice(order.total)}
-                  </strong>
+                                <strong>
+                                  {formatPrice(
+                                    item.subtotal ??
+                                      Number(item.price || 0) *
+                                        Number(item.quantity || 0)
+                                  )}
+                                </strong>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
 
-                </div>
+                        <div className="details-section">
+                          <h4>Customer information</h4>
 
-              </article>
+                          <div className="customer-details">
+                            <p>
+                              <span>Name</span>
+                              <strong>
+                                {order.customerName ||
+                                  "Not available"}
+                              </strong>
+                            </p>
 
-            ))}
+                            <p>
+                              <span>Contact</span>
+                              <strong>
+                                {order.phone || "Not available"}
+                              </strong>
+                            </p>
+                          </div>
+                        </div>
 
-          </section>
+                        {order.orderType === "delivery" &&
+                          order.address && (
+                            <div className="details-section">
+                              <h4>Delivery address</h4>
+                              <p className="address-text">
+                                {order.address}
+                              </p>
+                            </div>
+                          )}
+
+                        {order.notes && (
+                          <div className="details-section">
+                            <h4>Order notes</h4>
+                            <p className="notes-text">
+                              {order.notes}
+                            </p>
+                          </div>
+                        )}
+
+                        <div className="details-total">
+                          <span>Order total</span>
+                          <strong>
+                            {formatPrice(order.total)}
+                          </strong>
+                        </div>
+                      </div>
+                    </details>
+                  </article>
+                );
+              })}
+            </section>
+          </>
         )}
-
       </section>
     </main>
   );

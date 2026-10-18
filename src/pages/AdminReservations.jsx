@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   collection,
   getDocs,
@@ -12,6 +12,30 @@ import { useNavigate } from "react-router-dom";
 import { auth, db } from "../services/firebase";
 import "../styles/AdminReservations.css";
 
+const STATUS_OPTIONS = [
+  "Pending",
+  "Confirmed",
+  "Completed",
+  "Cancelled",
+];
+
+const formatDate = (timestamp) => {
+  if (!timestamp?.toDate) {
+    return "Date unavailable";
+  }
+
+  return timestamp.toDate().toLocaleString("en-PH", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+};
+
+const getStatusClass = (status) =>
+  String(status || "Pending")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "-");
+
 function AdminReservations() {
   const navigate = useNavigate();
 
@@ -19,12 +43,13 @@ function AdminReservations() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [updatingId, setUpdatingId] = useState(null);
 
-  // =========================
-  // LOAD RESERVATIONS
-  // =========================
-  const loadReservations = async () => {
+  const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState("All");
+
+  const loadReservations = useCallback(async () => {
     try {
       setError("");
 
@@ -32,42 +57,36 @@ function AdminReservations() {
         collection(db, "reservations")
       );
 
-      const reservationList = snapshot.docs.map(
-        (reservationDoc) => ({
+      const reservationList = snapshot.docs
+        .map((reservationDoc) => ({
           id: reservationDoc.id,
           ...reservationDoc.data(),
-        })
-      );
+        }))
+        .sort((firstReservation, secondReservation) => {
+          const firstDate = firstReservation.createdAt?.toDate
+            ? firstReservation.createdAt.toDate()
+            : new Date(0);
 
-      // Newest reservations first
-      reservationList.sort((a, b) => {
-        const dateA = a.createdAt?.toDate
-          ? a.createdAt.toDate()
-          : new Date(0);
+          const secondDate = secondReservation.createdAt?.toDate
+            ? secondReservation.createdAt.toDate()
+            : new Date(0);
 
-        const dateB = b.createdAt?.toDate
-          ? b.createdAt.toDate()
-          : new Date(0);
-
-        return dateB - dateA;
-      });
+          return secondDate - firstDate;
+        });
 
       setReservations(reservationList);
-    } catch (err) {
+    } catch (loadError) {
       console.error(
         "Error loading reservations:",
-        err
+        loadError
       );
 
       setError(
         "Unable to load reservations. Please try again."
       );
     }
-  };
+  }, []);
 
-  // =========================
-  // CHECK ADMIN LOGIN
-  // =========================
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(
       auth,
@@ -81,7 +100,6 @@ function AdminReservations() {
           setLoading(true);
           setError("");
 
-          // Get the currently logged-in user's profile
           const userRef = doc(
             db,
             "users",
@@ -90,7 +108,6 @@ function AdminReservations() {
 
           const userSnapshot = await getDoc(userRef);
 
-          // User profile does not exist
           if (!userSnapshot.exists()) {
             alert("User profile not found.");
             navigate("/login", { replace: true });
@@ -99,7 +116,6 @@ function AdminReservations() {
 
           const userData = userSnapshot.data();
 
-          // Verify administrator role
           if (userData.role !== "admin") {
             alert(
               "Access denied. Administrator account required."
@@ -109,12 +125,11 @@ function AdminReservations() {
             return;
           }
 
-          // Load reservations after admin verification
           await loadReservations();
-        } catch (err) {
+        } catch (accessError) {
           console.error(
             "Error checking administrator access:",
-            err
+            accessError
           );
 
           setError(
@@ -127,119 +142,119 @@ function AdminReservations() {
     );
 
     return () => unsubscribe();
-  }, [navigate]);
+  }, [loadReservations, navigate]);
 
-  // =========================
-  // REFRESH RESERVATIONS
-  // =========================
+  const getCustomerName = (reservation) =>
+    reservation.customerName ||
+    reservation.name ||
+    "Anonymous customer";
+
+  const getCustomerEmail = (reservation) =>
+    reservation.customerEmail ||
+    reservation.email ||
+    "No email";
+
+  const getReservationDate = (reservation) =>
+    reservation.reservationDate ||
+    reservation.date ||
+    "Not specified";
+
+  const getReservationTime = (reservation) =>
+    reservation.reservationTime ||
+    reservation.time ||
+    "Not specified";
+
+  const getGuestCount = (reservation) =>
+    reservation.numberOfGuests ||
+    reservation.guests ||
+    reservation.partySize ||
+    "Not specified";
+
+  const getPhoneNumber = (reservation) =>
+    reservation.phone ||
+    reservation.contactNumber ||
+    "Not specified";
+
+  const filteredReservations = useMemo(() => {
+    const normalizedSearch = searchTerm.toLowerCase().trim();
+
+    return reservations.filter((reservation) => {
+      const currentStatus = reservation.status || "Pending";
+
+      const matchesStatus =
+        statusFilter === "All" ||
+        currentStatus === statusFilter;
+
+      const searchableText = `
+        ${reservation.id}
+        ${getCustomerName(reservation)}
+        ${getCustomerEmail(reservation)}
+        ${getPhoneNumber(reservation)}
+        ${getReservationDate(reservation)}
+        ${getReservationTime(reservation)}
+      `.toLowerCase();
+
+      const matchesSearch =
+        normalizedSearch === "" ||
+        searchableText.includes(normalizedSearch);
+
+      return matchesStatus && matchesSearch;
+    });
+  }, [reservations, searchTerm, statusFilter]);
+
+  const statistics = useMemo(() => {
+    const pending = reservations.filter(
+      (reservation) =>
+        String(reservation.status || "Pending").toLowerCase() ===
+        "pending"
+    ).length;
+
+    const confirmed = reservations.filter(
+      (reservation) =>
+        String(reservation.status || "").toLowerCase() ===
+        "confirmed"
+    ).length;
+
+    const completed = reservations.filter(
+      (reservation) =>
+        String(reservation.status || "").toLowerCase() ===
+        "completed"
+    ).length;
+
+    return {
+      total: reservations.length,
+      pending,
+      confirmed,
+      completed,
+    };
+  }, [reservations]);
+
   const handleRefresh = async () => {
     try {
       setRefreshing(true);
+      setNotice("");
       await loadReservations();
+      setNotice("Reservations refreshed.");
     } finally {
       setRefreshing(false);
     }
   };
 
-  // =========================
-  // FORMAT DATE
-  // =========================
-  const formatDate = (timestamp) => {
-    if (!timestamp?.toDate) {
-      return "Date unavailable";
-    }
-
-    return timestamp.toDate().toLocaleString();
-  };
-
-  // =========================
-  // GET CUSTOMER NAME
-  // =========================
-  const getCustomerName = (reservation) => {
-    return (
-      reservation.customerName ||
-      reservation.name ||
-      "Anonymous Customer"
-    );
-  };
-
-  // =========================
-  // GET CUSTOMER EMAIL
-  // =========================
-  const getCustomerEmail = (reservation) => {
-    return (
-      reservation.customerEmail ||
-      reservation.email ||
-      "No email"
-    );
-  };
-
-  // =========================
-  // GET RESERVATION DATE
-  // =========================
-  const getReservationDate = (reservation) => {
-    return (
-      reservation.reservationDate ||
-      reservation.date ||
-      "Not specified"
-    );
-  };
-
-  // =========================
-  // GET RESERVATION TIME
-  // =========================
-  const getReservationTime = (reservation) => {
-    return (
-      reservation.reservationTime ||
-      reservation.time ||
-      "Not specified"
-    );
-  };
-
-  // =========================
-  // GET NUMBER OF GUESTS
-  // =========================
-  const getGuestCount = (reservation) => {
-    return (
-      reservation.numberOfGuests ||
-      reservation.guests ||
-      reservation.partySize ||
-      "Not specified"
-    );
-  };
-
-  // =========================
-  // GET PHONE NUMBER
-  // =========================
-  const getPhoneNumber = (reservation) => {
-    return (
-      reservation.phone ||
-      reservation.contactNumber ||
-      "Not specified"
-    );
-  };
-
-  // =========================
-  // UPDATE RESERVATION STATUS
-  // =========================
   const handleStatusChange = async (
     reservationId,
     newStatus
   ) => {
     try {
       setUpdatingId(reservationId);
+      setNotice("");
 
-      const reservationRef = doc(
-        db,
-        "reservations",
-        reservationId
+      await updateDoc(
+        doc(db, "reservations", reservationId),
+        {
+          status: newStatus,
+        }
       );
 
-      await updateDoc(reservationRef, {
-        status: newStatus,
-      });
-
-      // Update the UI immediately
       setReservations((currentReservations) =>
         currentReservations.map((reservation) =>
           reservation.id === reservationId
@@ -250,13 +265,17 @@ function AdminReservations() {
             : reservation
         )
       );
-    } catch (err) {
+
+      setNotice(
+        `Reservation status updated to ${newStatus}.`
+      );
+    } catch (updateError) {
       console.error(
         "Error updating reservation status:",
-        err
+        updateError
       );
 
-      alert(
+      setNotice(
         "Unable to update reservation status. Please try again."
       );
     } finally {
@@ -264,120 +283,200 @@ function AdminReservations() {
     }
   };
 
-  // =========================
-  // LOADING
-  // =========================
   if (loading) {
     return (
       <main className="admin-reservations-page">
-        <div className="admin-reservations-container">
-          <p className="admin-reservations-loading">
-            Checking administrator access...
+        <section className="admin-reservations-loading">
+          <div className="loading-icon">◷</div>
+          <p className="admin-reservations-eyebrow">
+            CACTUS CAFE
           </p>
-        </div>
+          <h1>Loading reservation workspace</h1>
+          <div className="loading-bar" />
+        </section>
       </main>
     );
   }
 
-  // =========================
-  // PAGE
-  // =========================
   return (
     <main className="admin-reservations-page">
       <div className="admin-reservations-container">
-
-        {/* HEADER */}
         <header className="admin-reservations-header">
           <div>
             <p className="admin-reservations-eyebrow">
-              CACTUS CAFE
+              GUEST EXPERIENCE
             </p>
 
-            <h1>Customer Reservations</h1>
+            <h1>Reservations</h1>
 
             <p>
-              View and manage table reservations
-              submitted by Cactus Cafe customers.
+              Keep every booking organized and give each guest
+              a smooth arrival experience.
             </p>
           </div>
 
           <div className="admin-reservations-header-actions">
-
             <button
+              type="button"
               className="admin-refresh-button"
               onClick={handleRefresh}
               disabled={refreshing}
             >
-              {refreshing
-                ? "Refreshing..."
-                : "↻ Refresh"}
+              {refreshing ? "Refreshing..." : "↻ Refresh"}
             </button>
 
             <button
+              type="button"
               className="admin-back-button"
-              onClick={() =>
-                navigate("/admin")
-              }
+              onClick={() => navigate("/admin")}
             >
-              ← Back to Dashboard
+              ← Back to dashboard
             </button>
-
           </div>
         </header>
 
-        {/* ERROR */}
+        <section className="reservations-overview">
+          <div className="overview-stat">
+            <span>Total reservations</span>
+            <strong>{statistics.total}</strong>
+          </div>
+
+          <div className="overview-divider" />
+
+          <div className="overview-stat">
+            <span>Pending</span>
+            <strong>{statistics.pending}</strong>
+          </div>
+
+          <div className="overview-divider" />
+
+          <div className="overview-stat">
+            <span>Confirmed</span>
+            <strong>{statistics.confirmed}</strong>
+          </div>
+
+          <div className="overview-divider" />
+
+          <div className="overview-stat">
+            <span>Completed</span>
+            <strong>{statistics.completed}</strong>
+          </div>
+        </section>
+
+        {notice && (
+          <div className="reservations-notice" role="status">
+            <span>✓</span>
+            {notice}
+          </div>
+        )}
+
         {error && (
-          <div className="admin-reservations-error">
+          <div className="admin-reservations-error" role="alert">
+            <span>!</span>
             <p>{error}</p>
 
             <button
+              type="button"
               className="admin-retry-button"
               onClick={loadReservations}
             >
-              Try Again
+              Try again
             </button>
           </div>
         )}
 
-        {/* EMPTY */}
-        {!error && reservations.length === 0 && (
-          <div className="admin-reservations-empty">
-
-            <div className="empty-icon">
-              📅
-            </div>
-
-            <h2>No Reservations Yet</h2>
-
-            <p>
-              Customer reservations will appear
-              here after customers make a reservation.
+        <section className="reservations-toolbar">
+          <div>
+            <p className="admin-reservations-eyebrow">
+              BOOKING QUEUE
             </p>
 
+            <h2>Manage guest reservations</h2>
           </div>
+
+          <div className="reservations-toolbar-actions">
+            <label className="reservation-search">
+              <span>⌕</span>
+
+              <input
+                type="search"
+                placeholder="Search guest or reservation"
+                value={searchTerm}
+                onChange={(event) =>
+                  setSearchTerm(event.target.value)
+                }
+              />
+            </label>
+
+            <select
+              className="reservation-filter"
+              value={statusFilter}
+              onChange={(event) =>
+                setStatusFilter(event.target.value)
+              }
+            >
+              <option value="All">All statuses</option>
+
+              {STATUS_OPTIONS.map((status) => (
+                <option value={status} key={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
+          </div>
+        </section>
+
+        {!error && reservations.length === 0 && (
+          <section className="admin-reservations-empty">
+            <div className="empty-icon">◷</div>
+
+            <p className="admin-reservations-eyebrow">
+              BOOKING QUEUE
+            </p>
+
+            <h2>No reservations yet</h2>
+
+            <p>
+              Customer reservations will appear here after
+              guests book a table.
+            </p>
+          </section>
         )}
 
-        {/* RESERVATIONS */}
-        {!error && reservations.length > 0 && (
-          <section className="admin-reservations-list">
+        {!error &&
+          reservations.length > 0 &&
+          filteredReservations.length === 0 && (
+            <section className="admin-reservations-empty compact-empty">
+              <div className="empty-icon">⌕</div>
 
-            {/* COUNT */}
-            <div className="reservations-count">
-              Total Reservations:{" "}
-              <strong>
-                {reservations.length}
-              </strong>
+              <h2>No matching reservations</h2>
+
+              <p>
+                Try another search term or choose a different
+                status.
+              </p>
+            </section>
+          )}
+
+        {!error && filteredReservations.length > 0 && (
+          <section className="admin-reservations-list">
+            <div className="reservations-list-heading">
+              <div>
+                <p className="admin-reservations-eyebrow">
+                  GUEST ACTIVITY
+                </p>
+
+                <h2>
+                  {filteredReservations.length}{" "}
+                  {filteredReservations.length === 1
+                    ? "reservation"
+                    : "reservations"}{" "}
+                  shown
+                </h2>
+              </div>
             </div>
 
-            {/* RESERVATION CARDS */}
-            {reservations.map((reservation) => {
-
-              const customerName =
-                getCustomerName(reservation);
-
-              const customerEmail =
-                getCustomerEmail(reservation);
-
+            {filteredReservations.map((reservation) => {
               const currentStatus =
                 reservation.status || "Pending";
 
@@ -386,32 +485,111 @@ function AdminReservations() {
                   className="admin-reservation-card"
                   key={reservation.id}
                 >
-
-                  {/* TOP */}
-                  <div className="admin-reservation-top">
-
+                  <div className="reservation-card-header">
                     <div>
                       <span className="reservation-label">
-                        RESERVATION ID
+                        RESERVATION
                       </span>
 
+                      <h3>
+                        #
+                        {reservation.id
+                          .slice(0, 8)
+                          .toUpperCase()}
+                      </h3>
+
+                      <p className="reservation-created">
+                        Created{" "}
+                        {formatDate(reservation.createdAt)}
+                      </p>
+                    </div>
+
+                    <span
+                      className={`reservation-status status-${getStatusClass(
+                        currentStatus
+                      )}`}
+                    >
+                      <span className="status-dot" />
+                      {currentStatus}
+                    </span>
+                  </div>
+
+                  <div className="reservation-highlight">
+                    <div className="highlight-date">
+                      <span className="calendar-icon">◷</span>
+
+                      <div>
+                        <span>BOOKING DATE</span>
+                        <strong>
+                          {getReservationDate(reservation)}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div>
+                      <span>TIME</span>
                       <strong>
-                        {reservation.id}
+                        {getReservationTime(reservation)}
                       </strong>
                     </div>
 
-                    {/* STATUS */}
-                    <div className="reservation-status-control">
+                    <div>
+                      <span>GUESTS</span>
+                      <strong>
+                        {getGuestCount(reservation)}
+                      </strong>
+                    </div>
+                  </div>
 
+                  <div className="reservation-info">
+                    <div>
                       <span className="reservation-label">
-                        STATUS
+                        CUSTOMER
                       </span>
 
+                      <strong>
+                        {getCustomerName(reservation)}
+                      </strong>
+
+                      <small>
+                        {getCustomerEmail(reservation)}
+                      </small>
+                    </div>
+
+                    <div>
+                      <span className="reservation-label">
+                        CONTACT
+                      </span>
+
+                      <strong>
+                        {getPhoneNumber(reservation)}
+                      </strong>
+                    </div>
+                  </div>
+
+                  {reservation.notes && (
+                    <div className="reservation-notes">
+                      <span className="reservation-label">
+                        GUEST NOTES
+                      </span>
+
+                      <p>{reservation.notes}</p>
+                    </div>
+                  )}
+
+                  <div className="reservation-status-control">
+                    <label
+                      htmlFor={`status-${reservation.id}`}
+                    >
+                      Update reservation status
+                    </label>
+
+                    <div className="status-control-row">
                       <select
+                        id={`status-${reservation.id}`}
                         value={currentStatus}
                         disabled={
-                          updatingId ===
-                          reservation.id
+                          updatingId === reservation.id
                         }
                         onChange={(event) =>
                           handleStatusChange(
@@ -420,141 +598,28 @@ function AdminReservations() {
                           )
                         }
                       >
-                        <option value="Pending">
-                          Pending
-                        </option>
-
-                        <option value="Confirmed">
-                          Confirmed
-                        </option>
-
-                        <option value="Completed">
-                          Completed
-                        </option>
-
-                        <option value="Cancelled">
-                          Cancelled
-                        </option>
+                        {STATUS_OPTIONS.map((status) => (
+                          <option
+                            value={status}
+                            key={status}
+                          >
+                            {status}
+                          </option>
+                        ))}
                       </select>
 
-                      {updatingId ===
-                        reservation.id && (
-                        <small>
+                      {updatingId === reservation.id && (
+                        <span className="updating-label">
                           Updating...
-                        </small>
+                        </span>
                       )}
-
                     </div>
-
                   </div>
-
-                  {/* CUSTOMER INFORMATION */}
-                  <div className="admin-reservation-info">
-
-                    {/* CUSTOMER */}
-                    <div>
-                      <span className="reservation-label">
-                        CUSTOMER
-                      </span>
-
-                      <p>
-                        {customerName}
-                      </p>
-
-                      <small>
-                        {customerEmail}
-                      </small>
-                    </div>
-
-                    {/* DATE */}
-                    <div>
-                      <span className="reservation-label">
-                        DATE
-                      </span>
-
-                      <p>
-                        {getReservationDate(
-                          reservation
-                        )}
-                      </p>
-                    </div>
-
-                    {/* TIME */}
-                    <div>
-                      <span className="reservation-label">
-                        TIME
-                      </span>
-
-                      <p>
-                        {getReservationTime(
-                          reservation
-                        )}
-                      </p>
-                    </div>
-
-                    {/* GUESTS */}
-                    <div>
-                      <span className="reservation-label">
-                        GUESTS
-                      </span>
-
-                      <p>
-                        {getGuestCount(
-                          reservation
-                        )}
-                      </p>
-                    </div>
-
-                    {/* CONTACT */}
-                    <div>
-                      <span className="reservation-label">
-                        CONTACT
-                      </span>
-
-                      <p>
-                        {getPhoneNumber(
-                          reservation
-                        )}
-                      </p>
-                    </div>
-
-                    {/* CREATED */}
-                    <div>
-                      <span className="reservation-label">
-                        CREATED
-                      </span>
-
-                      <p>
-                        {formatDate(
-                          reservation.createdAt
-                        )}
-                      </p>
-                    </div>
-
-                  </div>
-
-                  {/* NOTES */}
-                  {reservation.notes && (
-                    <div className="admin-reservation-notes">
-
-                      <strong>
-                        Reservation Notes
-                      </strong>
-
-                      <p>
-                        {reservation.notes}
-                      </p>
-
-                    </div>
-                  )}
-
                 </article>
               );
             })}
-
           </section>
         )}
-
       </div>
     </main>
   );

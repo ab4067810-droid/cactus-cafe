@@ -1,22 +1,64 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, getDocs } from "firebase/firestore";
+import {
+  collection,
+  getDocs,
+  getDoc,
+  doc,
+} from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 
 import { auth, db } from "../services/firebase";
 import "../styles/AdminUsers.css";
+
+const formatDate = (timestamp) => {
+  if (!timestamp?.toDate) {
+    return "Date unavailable";
+  }
+
+  return timestamp.toDate().toLocaleString("en-PH", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+};
+
+const getUserName = (user) =>
+  user.name ||
+  user.fullName ||
+  user.displayName ||
+  "Unnamed user";
+
+const getUserRole = (user) =>
+  String(user.role || "customer").toLowerCase();
+
+const getInitials = (user) => {
+  const name = getUserName(user);
+
+  if (name === "Unnamed user") {
+    return "U";
+  }
+
+  return name
+    .split(" ")
+    .map((part) => part.charAt(0))
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+};
 
 function AdminUsers() {
   const navigate = useNavigate();
 
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
-  // =========================
-  // LOAD USERS
-  // =========================
-  const loadUsers = async () => {
+  const [searchTerm, setSearchTerm] = useState("");
+  const [roleFilter, setRoleFilter] = useState("All");
+
+  const loadUsers = useCallback(async () => {
     try {
       setError("");
 
@@ -24,76 +66,71 @@ function AdminUsers() {
         collection(db, "users")
       );
 
-      const usersList = snapshot.docs.map((userDoc) => ({
-        id: userDoc.id,
-        ...userDoc.data(),
-      }));
+      const usersList = snapshot.docs
+        .map((userDoc) => ({
+          id: userDoc.id,
+          ...userDoc.data(),
+        }))
+        .sort((firstUser, secondUser) => {
+          const firstDate = firstUser.createdAt?.toDate
+            ? firstUser.createdAt.toDate()
+            : new Date(0);
 
-      // Newest users first
-      usersList.sort((a, b) => {
-        const dateA = a.createdAt?.toDate
-          ? a.createdAt.toDate()
-          : new Date(0);
+          const secondDate = secondUser.createdAt?.toDate
+            ? secondUser.createdAt.toDate()
+            : new Date(0);
 
-        const dateB = b.createdAt?.toDate
-          ? b.createdAt.toDate()
-          : new Date(0);
-
-        return dateB - dateA;
-      });
+          return secondDate - firstDate;
+        });
 
       setUsers(usersList);
-    } catch (err) {
-      console.error("Error loading users:", err);
-
-      setError(
-        "Unable to load users. Please try again."
-      );
+    } catch (loadError) {
+      console.error("Error loading users:", loadError);
+      setError("Unable to load users. Please try again.");
     }
-  };
+  }, []);
 
-  // =========================
-  // CHECK ADMIN LOGIN
-  // =========================
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(
       auth,
       async (currentUser) => {
         if (!currentUser) {
-          navigate("/login");
+          navigate("/login", { replace: true });
           return;
         }
 
         try {
           setLoading(true);
 
-          // Check the logged-in user's Firestore profile
-          const snapshot = await getDocs(
-            collection(db, "users")
+          const currentUserSnapshot = await getDoc(
+            doc(db, "users", currentUser.uid)
           );
 
-          const currentUserData = snapshot.docs.find(
-            (userDoc) => userDoc.id === currentUser.uid
-          );
-
-          if (!currentUserData) {
+          if (!currentUserSnapshot.exists()) {
             alert("User profile not found.");
-            navigate("/login");
+            navigate("/login", { replace: true });
             return;
           }
 
-          const userData = currentUserData.data();
+          const currentUserData =
+            currentUserSnapshot.data();
 
-          if (userData.role !== "admin") {
-            alert(
-              "Access denied. Admin account required."
-            );
-
-            navigate("/customer");
+          if (currentUserData.role !== "admin") {
+            alert("Access denied. Admin account required.");
+            navigate("/customer", { replace: true });
             return;
           }
 
           await loadUsers();
+        } catch (accessError) {
+          console.error(
+            "Error checking admin access:",
+            accessError
+          );
+
+          setError(
+            "Unable to verify administrator access."
+          );
         } finally {
           setLoading(false);
         }
@@ -101,205 +138,314 @@ function AdminUsers() {
     );
 
     return () => unsubscribe();
-  }, [navigate]);
+  }, [loadUsers, navigate]);
 
-  // =========================
-  // FORMAT CREATED DATE
-  // =========================
-  const formatDate = (timestamp) => {
-    if (!timestamp?.toDate) {
-      return "Date unavailable";
+  const statistics = useMemo(() => {
+    const adminCount = users.filter(
+      (user) => getUserRole(user) === "admin"
+    ).length;
+
+    return {
+      total: users.length,
+      customers: users.length - adminCount,
+      admins: adminCount,
+    };
+  }, [users]);
+
+  const filteredUsers = useMemo(() => {
+    const normalizedSearch = searchTerm.toLowerCase().trim();
+
+    return users.filter((user) => {
+      const role = getUserRole(user);
+      const name = getUserName(user);
+      const email = user.email || "No email";
+
+      const matchesRole =
+        roleFilter === "All" || role === roleFilter;
+
+      const searchableText = `
+        ${name}
+        ${email}
+        ${role}
+        ${user.id}
+      `.toLowerCase();
+
+      const matchesSearch =
+        normalizedSearch === "" ||
+        searchableText.includes(normalizedSearch);
+
+      return matchesRole && matchesSearch;
+    });
+  }, [users, searchTerm, roleFilter]);
+
+  const handleRefresh = async () => {
+    try {
+      setRefreshing(true);
+      setNotice("");
+      await loadUsers();
+      setNotice("User list refreshed.");
+    } finally {
+      setRefreshing(false);
     }
-
-    return timestamp.toDate().toLocaleString();
   };
 
-  // =========================
-  // GET DISPLAY NAME
-  // =========================
-  const getUserName = (user) => {
-    return (
-      user.name ||
-      user.fullName ||
-      user.displayName ||
-      "Unnamed User"
-    );
-  };
-
-  // =========================
-  // GET USER ROLE
-  // =========================
-  const getUserRole = (user) => {
-    return user.role || "customer";
-  };
-
-  // =========================
-  // LOADING
-  // =========================
   if (loading) {
     return (
       <main className="admin-users-page">
-        <div className="admin-users-container">
-          <p className="admin-users-loading">
-            Loading users...
+        <section className="admin-users-loading">
+          <div className="loading-icon">◎</div>
+
+          <p className="admin-users-eyebrow">
+            CACTUS CAFE
           </p>
-        </div>
+
+          <h1>Loading user workspace</h1>
+
+          <div className="loading-bar" />
+        </section>
       </main>
     );
   }
 
-  // =========================
-  // PAGE
-  // =========================
   return (
     <main className="admin-users-page">
       <div className="admin-users-container">
-
-        {/* HEADER */}
         <header className="admin-users-header">
           <div>
             <p className="admin-users-eyebrow">
-              CACTUS CAFE
+              CUSTOMER DIRECTORY
             </p>
 
-            <h1>Registered Users</h1>
+            <h1>Registered users</h1>
 
             <p>
-              View customer accounts registered on
-              the Cactus Cafe website.
+              View customer accounts and understand who is
+              connected to the Cactus Cafe experience.
             </p>
           </div>
 
-          <button
-            className="admin-back-button"
-            onClick={() => navigate("/admin")}
-          >
-            ← Back to Dashboard
-          </button>
+          <div className="admin-users-header-actions">
+            <button
+              type="button"
+              className="refresh-users-button"
+              onClick={handleRefresh}
+              disabled={refreshing}
+            >
+              {refreshing ? "Refreshing..." : "↻ Refresh"}
+            </button>
+
+            <button
+              type="button"
+              className="admin-back-button"
+              onClick={() => navigate("/admin")}
+            >
+              ← Back to dashboard
+            </button>
+          </div>
         </header>
 
-        {/* ERROR */}
-        {error && (
-          <div className="admin-users-error">
-            {error}
+        <section className="users-overview">
+          <div className="overview-stat">
+            <span>Total users</span>
+            <strong>{statistics.total}</strong>
+          </div>
+
+          <div className="overview-divider" />
+
+          <div className="overview-stat">
+            <span>Customers</span>
+            <strong>{statistics.customers}</strong>
+          </div>
+
+          <div className="overview-divider" />
+
+          <div className="overview-stat">
+            <span>Administrators</span>
+            <strong>{statistics.admins}</strong>
+          </div>
+        </section>
+
+        {notice && (
+          <div className="admin-users-notice" role="status">
+            <span>✓</span>
+            {notice}
           </div>
         )}
 
-        {/* EMPTY */}
-        {!error && users.length === 0 && (
-          <div className="admin-users-empty">
-            <div className="empty-icon">
-              👥
-            </div>
+        {error && (
+          <div className="admin-users-error" role="alert">
+            <span>!</span>
+            <p>{error}</p>
 
-            <h2>No Users Yet</h2>
+            <button
+              type="button"
+              onClick={loadUsers}
+            >
+              Try again
+            </button>
+          </div>
+        )}
+
+        <section className="users-toolbar">
+          <div>
+            <p className="admin-users-eyebrow">
+              ACCOUNT DIRECTORY
+            </p>
+
+            <h2>Manage registered accounts</h2>
+          </div>
+
+          <div className="users-toolbar-actions">
+            <label className="users-search">
+              <span>⌕</span>
+
+              <input
+                type="search"
+                placeholder="Search name, email, or ID"
+                value={searchTerm}
+                onChange={(event) =>
+                  setSearchTerm(event.target.value)
+                }
+              />
+            </label>
+
+            <select
+              className="role-filter"
+              value={roleFilter}
+              onChange={(event) =>
+                setRoleFilter(event.target.value)
+              }
+            >
+              <option value="All">All roles</option>
+              <option value="customer">Customers</option>
+              <option value="admin">Administrators</option>
+            </select>
+          </div>
+        </section>
+
+        {!error && users.length === 0 && (
+          <section className="admin-users-empty">
+            <div className="empty-icon">◎</div>
+
+            <p className="admin-users-eyebrow">
+              ACCOUNT DIRECTORY
+            </p>
+
+            <h2>No users yet</h2>
 
             <p>
-              Registered customer accounts will
-              appear here.
+              Registered customer accounts will appear here.
             </p>
-          </div>
+          </section>
         )}
 
-        {/* USERS */}
-        {users.length > 0 && (
-          <section className="admin-users-list">
+        {!error &&
+          users.length > 0 &&
+          filteredUsers.length === 0 && (
+            <section className="admin-users-empty compact-empty">
+              <div className="empty-icon">⌕</div>
 
-            <div className="users-count">
-              Total Users:{" "}
-              <strong>{users.length}</strong>
+              <h2>No matching users</h2>
+
+              <p>
+                Try another search term or choose a different
+                role.
+              </p>
+            </section>
+          )}
+
+        {!error && filteredUsers.length > 0 && (
+          <section className="admin-users-list">
+            <div className="users-list-heading">
+              <div>
+                <p className="admin-users-eyebrow">
+                  USER ACTIVITY
+                </p>
+
+                <h2>
+                  {filteredUsers.length}{" "}
+                  {filteredUsers.length === 1
+                    ? "account"
+                    : "accounts"}{" "}
+                  shown
+                </h2>
+              </div>
             </div>
 
-            {users.map((user) => {
-              const role = getUserRole(user);
+            <div className="users-grid">
+              {filteredUsers.map((user) => {
+                const role = getUserRole(user);
+                const name = getUserName(user);
+                const email = user.email || "No email";
 
-              return (
-                <article
-                  className="admin-user-card"
-                  key={user.id}
-                >
+                return (
+                  <article
+                    className="admin-user-card"
+                    key={user.id}
+                  >
+                    <div className="user-card-header">
+                      <div className="user-profile">
+                        <div className="user-avatar">
+                          {getInitials(user)}
+                        </div>
 
-                  {/* USER HEADER */}
-                  <div className="admin-user-top">
+                        <div>
+                          <span className="user-label">
+                            ACCOUNT
+                          </span>
 
-                    <div>
-                      <span className="user-label">
-                        USER
-                      </span>
+                          <h3>{name}</h3>
 
-                      <h2>
-                        {getUserName(user)}
-                      </h2>
+                          <p>{email}</p>
+                        </div>
+                      </div>
 
-                      <p className="user-email">
-                        {user.email || "No email"}
-                      </p>
-                    </div>
-
-                    <span
-                      className={`user-role ${
-                        role === "admin"
-                          ? "user-role-admin"
-                          : "user-role-customer"
-                      }`}
-                    >
-                      {role}
-                    </span>
-
-                  </div>
-
-                  {/* USER INFORMATION */}
-                  <div className="admin-user-info">
-
-                    <div>
-                      <span className="user-label">
-                        EMAIL
-                      </span>
-
-                      <p>
-                        {user.email || "No email"}
-                      </p>
-                    </div>
-
-                    <div>
-                      <span className="user-label">
-                        ROLE
-                      </span>
-
-                      <p>
+                      <span
+                        className={`user-role ${
+                          role === "admin"
+                            ? "user-role-admin"
+                            : "user-role-customer"
+                        }`}
+                      >
                         {role}
-                      </p>
+                      </span>
                     </div>
 
-                    <div>
+                    <div className="user-details">
+                      <div>
+                        <span className="user-label">
+                          EMAIL
+                        </span>
+
+                        <strong>{email}</strong>
+                      </div>
+
+                      <div>
+                        <span className="user-label">
+                          REGISTERED
+                        </span>
+
+                        <strong>
+                          {formatDate(user.createdAt)}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div className="user-card-footer">
                       <span className="user-label">
                         USER ID
                       </span>
 
-                      <p className="user-id">
+                      <code title={user.id}>
                         {user.id}
-                      </p>
+                      </code>
                     </div>
-
-                    <div>
-                      <span className="user-label">
-                        REGISTERED
-                      </span>
-
-                      <p>
-                        {formatDate(user.createdAt)}
-                      </p>
-                    </div>
-
-                  </div>
-
-                </article>
-              );
-            })}
-
+                  </article>
+                );
+              })}
+            </div>
           </section>
         )}
-
       </div>
     </main>
   );

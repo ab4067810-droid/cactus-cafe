@@ -8,7 +8,7 @@ import {
 import HomePage from "../pages/HomePage";
 import MenuPage from "../pages/MenuPage";
 import AboutPage from "../pages/AboutPage";
-import Login from "../pages/Login";
+import Login from "../pages/login";
 import Navigation from "../components/Navigation";
 import CustomerDashboard from "../pages/CustomerDashboard";
 import CheckoutPage from "../pages/CheckoutPage";
@@ -22,12 +22,13 @@ import AdminReservations from "../pages/AdminReservations";
 import AdminReviews from "../pages/AdminReviews";
 import AdminMenu from "../pages/AdminMenu";
 import AdminUsers from "../pages/AdminUsers";
+
 /**
  * AppRoutes Component
  * 
  * This component sets up all the routes for the Cactus Cafe website.
- * It shows the navigation bar on all pages (except login) and routes users to different pages
- * based on the URL.
+ * It shows the navigation bar on all pages except login and routes users
+ * to the appropriate page based on the URL.
  * 
  * Routes:
  * - / (home) -> HomePage
@@ -41,21 +42,12 @@ function AppRoutesContent() {
 
   return (
     <>
-      {/* Navigation bar appears on all pages except login */}
       {!isLoginPage && <Navigation />}
-      
-      {/* Main content changes based on the current page/route */}
+
       <Routes>
-        {/* Home Page - the main landing page */}
         <Route path="/" element={<HomePage />} />
-
-        {/* Menu Page - will show all menu items later */}
         <Route path="/menu" element={<MenuPage />} />
-
-        {/* About Page - will tell your cafe's story */}
         <Route path="/about" element={<AboutPage />} />
-
-        {/* Login Page - for users to sign in (no navbar) */}
         <Route path="/login" element={<Login />} />
         <Route path="/customer" element={<CustomerDashboard />} />
         <Route path="/checkout" element={<CheckoutPage />} />

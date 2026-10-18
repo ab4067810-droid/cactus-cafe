@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   collection,
-  getDocs,
+  deleteDoc,
   doc,
   getDoc,
-  deleteDoc,
+  getDocs,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { useNavigate } from "react-router-dom";
@@ -12,18 +12,48 @@ import { useNavigate } from "react-router-dom";
 import { auth, db } from "../services/firebase";
 import "../styles/AdminReviews.css";
 
+const REVIEW_STATUSES = ["All", "Pending", "Approved", "Rejected"];
+
+const formatDate = (timestamp) => {
+  if (!timestamp?.toDate) {
+    return "Date unavailable";
+  }
+
+  return timestamp.toDate().toLocaleString("en-PH", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+};
+
+const getRating = (review) =>
+  Number(review.rating ?? review.stars ?? 0);
+
+const getComment = (review) =>
+  review.comment ||
+  review.review ||
+  review.message ||
+  "No comment provided.";
+
+const getStatusClass = (status) =>
+  String(status || "Pending")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "-");
+
 function AdminReviews() {
   const navigate = useNavigate();
 
   const [reviews, setReviews] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [deletingId, setDeletingId] = useState(null);
 
-  // =========================
-  // LOAD REVIEWS
-  // =========================
-  const loadReviews = async () => {
+  const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState("All");
+
+  const loadReviews = useCallback(async () => {
     try {
       setError("");
 
@@ -31,84 +61,65 @@ function AdminReviews() {
         collection(db, "reviews")
       );
 
-      const reviewList = snapshot.docs.map((reviewDoc) => ({
-        id: reviewDoc.id,
-        ...reviewDoc.data(),
-      }));
+      const reviewList = snapshot.docs
+        .map((reviewDoc) => ({
+          id: reviewDoc.id,
+          ...reviewDoc.data(),
+        }))
+        .sort((firstReview, secondReview) => {
+          const firstDate = firstReview.createdAt?.toDate
+            ? firstReview.createdAt.toDate()
+            : new Date(0);
 
-      // Newest reviews first
-      reviewList.sort((a, b) => {
-        const dateA = a.createdAt?.toDate
-          ? a.createdAt.toDate()
-          : new Date(0);
+          const secondDate = secondReview.createdAt?.toDate
+            ? secondReview.createdAt.toDate()
+            : new Date(0);
 
-        const dateB = b.createdAt?.toDate
-          ? b.createdAt.toDate()
-          : new Date(0);
-
-        return dateB - dateA;
-      });
+          return secondDate - firstDate;
+        });
 
       setReviews(reviewList);
-    } catch (err) {
-      console.error("Error loading reviews:", err);
-
-      setError(
-        "Unable to load reviews. Please try again."
-      );
+    } catch (loadError) {
+      console.error("Error loading reviews:", loadError);
+      setError("Unable to load reviews. Please try again.");
     }
-  };
+  }, []);
 
-  // =========================
-  // CHECK ADMIN LOGIN
-  // =========================
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(
       auth,
       async (currentUser) => {
         if (!currentUser) {
-          navigate("/login");
+          navigate("/login", { replace: true });
           return;
         }
 
         try {
           setLoading(true);
-          setError("");
 
-          // Get the logged-in user's profile
-          const userRef = doc(
-            db,
-            "users",
-            currentUser.uid
+          const userSnapshot = await getDoc(
+            doc(db, "users", currentUser.uid)
           );
 
-          const userSnapshot = await getDoc(userRef);
-
-          // User profile does not exist
           if (!userSnapshot.exists()) {
             alert("User profile not found.");
-            navigate("/login");
+            navigate("/login", { replace: true });
             return;
           }
 
           const userData = userSnapshot.data();
 
-          // Check admin role
           if (userData.role !== "admin") {
-            alert(
-              "Access denied. Admin account required."
-            );
-
-            navigate("/customer");
+            alert("Access denied. Admin account required.");
+            navigate("/customer", { replace: true });
             return;
           }
 
-          // User is an admin
           await loadReviews();
-        } catch (err) {
+        } catch (accessError) {
           console.error(
             "Error checking admin access:",
-            err
+            accessError
           );
 
           setError(
@@ -121,41 +132,78 @@ function AdminReviews() {
     );
 
     return () => unsubscribe();
-  }, [navigate]);
+  }, [loadReviews, navigate]);
 
-  // =========================
-  // FORMAT DATE
-  // =========================
-  const formatDate = (timestamp) => {
-    if (!timestamp?.toDate) {
-      return "Date unavailable";
-    }
+  const filteredReviews = useMemo(() => {
+    const normalizedSearch = searchTerm.toLowerCase().trim();
 
-    return timestamp.toDate().toLocaleString();
-  };
+    return reviews.filter((review) => {
+      const status = review.status || "Pending";
 
-  // =========================
-  // GET RATING
-  // =========================
-  const getRating = (review) => {
-    return review.rating ?? review.stars ?? 0;
-  };
+      const customerName =
+        review.customerName ||
+        review.name ||
+        "Anonymous Customer";
 
-  // =========================
-  // GET COMMENT
-  // =========================
-  const getComment = (review) => {
-    return (
-      review.comment ||
-      review.review ||
-      review.message ||
-      "No comment provided."
+      const customerEmail =
+        review.customerEmail ||
+        review.email ||
+        "No email";
+
+      const matchesStatus =
+        statusFilter === "All" || status === statusFilter;
+
+      const searchableText = `
+        ${customerName}
+        ${customerEmail}
+        ${getComment(review)}
+        ${review.id}
+      `.toLowerCase();
+
+      const matchesSearch =
+        normalizedSearch === "" ||
+        searchableText.includes(normalizedSearch);
+
+      return matchesStatus && matchesSearch;
+    });
+  }, [reviews, searchTerm, statusFilter]);
+
+  const statistics = useMemo(() => {
+    const totalRating = reviews.reduce(
+      (sum, review) => sum + getRating(review),
+      0
     );
+
+    const pending = reviews.filter(
+      (review) => (review.status || "Pending") === "Pending"
+    ).length;
+
+    const approved = reviews.filter(
+      (review) => review.status === "Approved"
+    ).length;
+
+    return {
+      total: reviews.length,
+      pending,
+      approved,
+      average:
+        reviews.length > 0
+          ? (totalRating / reviews.length).toFixed(1)
+          : "0.0",
+    };
+  }, [reviews]);
+
+  const handleRefresh = async () => {
+    try {
+      setRefreshing(true);
+      setNotice("");
+      await loadReviews();
+      setNotice("Reviews refreshed.");
+    } finally {
+      setRefreshing(false);
+    }
   };
 
-  // =========================
-  // DELETE REVIEW
-  // =========================
   const handleDeleteReview = async (
     reviewId,
     customerName
@@ -172,28 +220,20 @@ function AdminReviews() {
 
     try {
       setDeletingId(reviewId);
+      setNotice("");
 
-      await deleteDoc(
-        doc(db, "reviews", reviewId)
-      );
+      await deleteDoc(doc(db, "reviews", reviewId));
 
-      // Remove the deleted review from the screen
       setReviews((currentReviews) =>
         currentReviews.filter(
           (review) => review.id !== reviewId
         )
       );
 
-      alert(
-        "Review deleted successfully! 🌵"
-      );
-    } catch (err) {
-      console.error(
-        "Error deleting review:",
-        err
-      );
-
-      alert(
+      setNotice("Review deleted successfully.");
+    } catch (deleteError) {
+      console.error("Error deleting review:", deleteError);
+      setNotice(
         "Unable to delete review. Please try again."
       );
     } finally {
@@ -201,90 +241,206 @@ function AdminReviews() {
     }
   };
 
-  // =========================
-  // LOADING
-  // =========================
   if (loading) {
     return (
       <main className="admin-reviews-page">
-        <div className="admin-reviews-container">
-          <p className="admin-reviews-loading">
-            Checking administrator access...
+        <section className="admin-reviews-loading">
+          <div className="loading-icon">★</div>
+          <p className="admin-reviews-eyebrow">
+            CACTUS CAFE
           </p>
-        </div>
+          <h1>Loading review workspace</h1>
+          <div className="loading-bar" />
+        </section>
       </main>
     );
   }
 
-  // =========================
-  // PAGE
-  // =========================
   return (
     <main className="admin-reviews-page">
       <div className="admin-reviews-container">
-
-        {/* HEADER */}
         <header className="admin-reviews-header">
           <div>
             <p className="admin-reviews-eyebrow">
-              CACTUS CAFE
+              GUEST EXPERIENCE
             </p>
 
-            <h1>Customer Reviews</h1>
+            <h1>Customer reviews</h1>
 
             <p>
-              View and manage feedback and ratings
-              submitted by Cactus Cafe customers.
+              Understand what customers love about Cactus Cafe
+              and where the experience can improve.
             </p>
           </div>
 
-          <button
-            className="admin-back-button"
-            onClick={() => navigate("/admin")}
-          >
-            ← Back to Dashboard
-          </button>
+          <div className="admin-reviews-header-actions">
+            <button
+              type="button"
+              className="admin-refresh-button"
+              onClick={handleRefresh}
+              disabled={refreshing}
+            >
+              {refreshing ? "Refreshing..." : "↻ Refresh"}
+            </button>
+
+            <button
+              type="button"
+              className="admin-back-button"
+              onClick={() => navigate("/admin")}
+            >
+              ← Back to dashboard
+            </button>
+          </div>
         </header>
 
-        {/* ERROR */}
-        {error && (
-          <div className="admin-reviews-error">
-            {error}
+        <section className="reviews-overview">
+          <div className="overview-stat">
+            <span>Total reviews</span>
+            <strong>{statistics.total}</strong>
+          </div>
+
+          <div className="overview-divider" />
+
+          <div className="overview-stat">
+            <span>Average rating</span>
+            <strong>
+              {statistics.average}
+              <small>/5</small>
+            </strong>
+          </div>
+
+          <div className="overview-divider" />
+
+          <div className="overview-stat">
+            <span>Pending review</span>
+            <strong>{statistics.pending}</strong>
+          </div>
+
+          <div className="overview-divider" />
+
+          <div className="overview-stat">
+            <span>Approved</span>
+            <strong>{statistics.approved}</strong>
+          </div>
+        </section>
+
+        {notice && (
+          <div className="admin-reviews-notice" role="status">
+            <span>✓</span>
+            {notice}
           </div>
         )}
 
-        {/* EMPTY */}
-        {!error && reviews.length === 0 && (
-          <div className="admin-reviews-empty">
-            <div className="empty-icon">
-              ⭐
-            </div>
+        {error && (
+          <div className="admin-reviews-error" role="alert">
+            <span>!</span>
+            <p>{error}</p>
 
-            <h2>No Reviews Yet</h2>
+            <button
+              type="button"
+              onClick={loadReviews}
+            >
+              Try again
+            </button>
+          </div>
+        )}
+
+        <section className="reviews-toolbar">
+          <div>
+            <p className="admin-reviews-eyebrow">
+              FEEDBACK LIBRARY
+            </p>
+
+            <h2>Manage customer feedback</h2>
+          </div>
+
+          <div className="reviews-toolbar-actions">
+            <label className="reviews-search">
+              <span>⌕</span>
+
+              <input
+                type="search"
+                placeholder="Search reviews"
+                value={searchTerm}
+                onChange={(event) =>
+                  setSearchTerm(event.target.value)
+                }
+              />
+            </label>
+
+            <select
+              className="review-filter"
+              value={statusFilter}
+              onChange={(event) =>
+                setStatusFilter(event.target.value)
+              }
+            >
+              {REVIEW_STATUSES.map((status) => (
+                <option value={status} key={status}>
+                  {status === "All"
+                    ? "All statuses"
+                    : status}
+                </option>
+              ))}
+            </select>
+          </div>
+        </section>
+
+        {!error && reviews.length === 0 && (
+          <section className="admin-reviews-empty">
+            <div className="empty-icon">★</div>
+
+            <p className="admin-reviews-eyebrow">
+              FEEDBACK LIBRARY
+            </p>
+
+            <h2>No reviews yet</h2>
 
             <p>
-              Customer reviews will appear here
-              after customers submit feedback.
+              Customer feedback will appear here after customers
+              submit a review.
             </p>
-          </div>
+          </section>
         )}
 
-        {/* REVIEWS */}
-        {reviews.length > 0 && (
-          <section className="admin-reviews-list">
+        {!error &&
+          reviews.length > 0 &&
+          filteredReviews.length === 0 && (
+            <section className="admin-reviews-empty compact-empty">
+              <div className="empty-icon">⌕</div>
 
-            {/* REVIEW COUNT */}
-            <div className="reviews-count">
-              Total Reviews:{" "}
-              <strong>
-                {reviews.length}
-              </strong>
+              <h2>No matching reviews</h2>
+
+              <p>
+                Try another search term or choose a different
+                status.
+              </p>
+            </section>
+          )}
+
+        {!error && filteredReviews.length > 0 && (
+          <section className="admin-reviews-list">
+            <div className="reviews-list-heading">
+              <div>
+                <p className="admin-reviews-eyebrow">
+                  CUSTOMER VOICE
+                </p>
+
+                <h2>
+                  {filteredReviews.length}{" "}
+                  {filteredReviews.length === 1
+                    ? "review"
+                    : "reviews"}{" "}
+                  shown
+                </h2>
+              </div>
             </div>
 
-            {/* REVIEW CARDS */}
-            {reviews.map((review) => {
-              const rating =
-                Number(getRating(review)) || 0;
+            {filteredReviews.map((review) => {
+              const rating = Math.min(
+                Math.max(Math.round(getRating(review)), 0),
+                5
+              );
 
               const customerName =
                 review.customerName ||
@@ -296,84 +452,79 @@ function AdminReviews() {
                 review.email ||
                 "No email";
 
+              const currentStatus =
+                review.status || "Pending";
+
               return (
                 <article
                   className="admin-review-card"
                   key={review.id}
                 >
+                  <div className="admin-review-card-header">
+                    <div className="customer-profile">
+                      <div className="customer-avatar">
+                        {customerName.charAt(0).toUpperCase()}
+                      </div>
 
-                  {/* REVIEW TOP */}
-                  <div className="admin-review-top">
+                      <div>
+                        <span className="review-label">
+                          CUSTOMER
+                        </span>
 
-                    <div>
-                      <span className="review-label">
-                        CUSTOMER
-                      </span>
+                        <h3>{customerName}</h3>
 
-                      <h2>
-                        {customerName}
-                      </h2>
-
-                      <p className="review-email">
-                        {customerEmail}
-                      </p>
+                        <p>{customerEmail}</p>
+                      </div>
                     </div>
 
-                    {/* RATING */}
                     <div className="review-rating">
-                      {"⭐".repeat(
-                        Math.min(
-                          Math.max(
-                            Math.round(rating),
-                            0
-                          ),
-                          5
-                        )
-                      )}
+                      <div className="rating-stars">
+                        <span className="filled-stars">
+                          {"★".repeat(rating)}
+                        </span>
 
-                      <span>
-                        {rating}/5
+                        <span className="empty-stars">
+                          {"★".repeat(5 - rating)}
+                        </span>
+                      </div>
+
+                      <strong>{rating}/5</strong>
+                    </div>
+                  </div>
+
+                  <div className="review-feedback">
+                    <div className="feedback-heading">
+                      <span className="review-label">
+                        CUSTOMER FEEDBACK
+                      </span>
+
+                      <span
+                        className={`review-status status-${getStatusClass(
+                          currentStatus
+                        )}`}
+                      >
+                        {currentStatus}
                       </span>
                     </div>
 
+                    <p>“{getComment(review)}”</p>
                   </div>
 
-                  {/* CUSTOMER FEEDBACK */}
-                  <div className="admin-review-comment">
-                    <span className="review-label">
-                      CUSTOMER FEEDBACK
-                    </span>
-
-                    <p>
-                      "{getComment(review)}"
-                    </p>
-                  </div>
-
-                  {/* FOOTER */}
                   <div className="admin-review-footer">
-
                     <span>
-                      Submitted:{" "}
-                      {formatDate(
-                        review.createdAt
-                      )}
+                      Submitted: {formatDate(review.createdAt)}
                     </span>
 
                     <span>
-                      Review ID: {review.id}
+                      ID: {review.id.slice(0, 8)}
                     </span>
-
                   </div>
 
-                  {/* DELETE */}
                   <div className="admin-review-actions">
-
                     <button
                       type="button"
                       className="delete-review-button"
-                      disabled={
-                        deletingId === review.id
-                      }
+                      disabled={deletingId === review.id}
                       onClick={() =>
                         handleDeleteReview(
                           review.id,
@@ -383,18 +534,14 @@ function AdminReviews() {
                     >
                       {deletingId === review.id
                         ? "Deleting..."
-                        : "Delete Review"}
+                        : "Delete review"}
                     </button>
-
                   </div>
-
                 </article>
               );
             })}
-
           </section>
         )}
-
       </div>
     </main>
   );
