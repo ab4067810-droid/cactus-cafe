@@ -198,16 +198,24 @@ function MyOrders() {
   if (loading) {
     return (
       <main className="my-orders-page">
-        <section className="my-orders-container">
-          <div className="orders-skeleton-header" />
+        <section
+          className="my-orders-container"
+          aria-busy="true"
+          aria-label="Loading your orders"
+        >
+          <p className="orders-loading-status" role="status">
+            Loading your orders...
+          </p>
 
-          <div className="orders-skeleton-card">
+          <div className="orders-skeleton-header" aria-hidden="true" />
+
+          <div className="orders-skeleton-card" aria-hidden="true">
             <div className="skeleton-line skeleton-short" />
             <div className="skeleton-line skeleton-medium" />
             <div className="skeleton-block" />
           </div>
 
-          <div className="orders-skeleton-card">
+          <div className="orders-skeleton-card" aria-hidden="true">
             <div className="skeleton-line skeleton-short" />
             <div className="skeleton-line skeleton-medium" />
             <div className="skeleton-block" />
@@ -258,7 +266,21 @@ function MyOrders() {
 
         {!error && orders.length === 0 && (
           <section className="no-orders">
-            <div className="empty-icon">🛒</div>
+            <div className="empty-icon" aria-hidden="true">
+              <svg
+                viewBox="0 0 32 32"
+                width="32"
+                height="32"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M8 13h16l-1.5 13h-13L8 13Z" />
+                <path d="m12 13 4-7 4 7M12.5 18v3M16 18v3M19.5 18v3" />
+              </svg>
+            </div>
 
             <p className="orders-eyebrow">YOUR ORDER HISTORY</p>
 

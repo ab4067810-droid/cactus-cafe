@@ -1,0 +1,50 @@
+ .firebaserc                                     |    5 [32m+[m
+ firebase.json                                   |   22 [32m+[m
+ firestore.rules                                 |   90 [32m+[m
+ functions/index.js                              |  181 [32m++[m
+ functions/orderPricing.js                       |   80 [32m+[m
+ functions/orderPricing.test.js                  |   73 [32m+[m
+ functions/package-lock.json                     | 3006 [32m+++++++++++++++++++++++[m
+ functions/package.json                          |   16 [32m+[m
+ img/ChatGPT Image Sep 18, 2026, 04_31_31 PM.png |  Bin [31m0[m -> [32m1711486[m bytes
+ img/img5.jpg                                    |  Bin [31m0[m -> [32m1556412[m bytes
+ public/img0.jpg                                 |  Bin [31m0[m -> [32m2142037[m bytes
+ public/img1.jpg                                 |  Bin [31m0[m -> [32m1102347[m bytes
+ public/img2.jpg                                 |  Bin [31m0[m -> [32m4553914[m bytes
+ public/img3.jpg                                 |  Bin [31m0[m -> [32m2812185[m bytes
+ src/components/Navigation.jsx                   |  155 [32m+[m[31m-[m
+ src/context/Authcontext.jsx                     |   85 [32m+[m[31m-[m
+ src/main.jsx                                    |    1 [32m+[m
+ src/pages/AboutPage.jsx                         |  164 [32m+[m[31m-[m
+ src/pages/AdminDashboard.jsx                    |  325 [32m++[m[31m-[m
+ src/pages/AdminMenu.jsx                         |  700 [32m++++[m[31m--[m
+ src/pages/AdminOrders.jsx                       | 1020 [32m++++[m[31m----[m
+ src/pages/AdminReservations.jsx                 |  683 [32m++[m[31m---[m
+ src/pages/AdminReviews.jsx                      |  543 [32m++[m[31m--[m
+ src/pages/AdminUsers.jsx                        |  524 [32m++[m[31m--[m
+ src/pages/CheckoutPage.jsx                      |  624 [32m+++[m[31m--[m
+ src/pages/HomePage.jsx                          |  188 [32m+[m[31m-[m
+ src/pages/MenuPage.jsx                          |  487 [32m++[m[31m--[m
+ src/pages/MyOrders.jsx                          |  618 [32m+++[m[31m--[m
+ src/pages/MyReviews.jsx                         |  441 [32m+++[m[31m-[m
+ src/pages/login.jsx                             |  309 [32m+[m[31m--[m
+ src/routes/AppRoutes.jsx                        |   18 [32m+[m[31m-[m
+ src/services/firebase.jsx                       |    4 [32m+[m[31m-[m
+ src/styles/AboutPage.css                        |  659 [32m++++[m[31m-[m
+ src/styles/AdminDashboard.css                   |  729 [32m+++++[m[31m-[m
+ src/styles/AdminMenu.css                        |  923 [32m++++++[m[31m-[m
+ src/styles/AdminOrders.css                      |  797 [32m+++++[m[31m-[m
+ src/styles/AdminReservations.css                |  859 [32m++++[m[31m---[m
+ src/styles/AdminReviews.css                     |  704 [32m+++++[m[31m-[m
+ src/styles/AdminUsers.css                       |  656 [32m++++[m[31m-[m
+ src/styles/App.css                              |   21 [32m+[m[31m-[m
+ src/styles/CheckoutPage.css                     |  668 [32m++++[m[31m-[m
+ src/styles/CustomerDashboard.css                |  329 [32m++[m[31m-[m
+ src/styles/HomePage.css                         |  485 [32m+++[m[31m-[m
+ src/styles/Login.css                            |  604 [32m+++[m[31m--[m
+ src/styles/MenuPage.css                         |  677 [32m+++[m[31m--[m
+ src/styles/MyOrders.css                         |  889 [32m++++[m[31m---[m
+ src/styles/MyReviews.css                        |  689 [32m++++[m[31m--[m
+ src/styles/Navigation.css                       |  205 [32m+[m[31m-[m
+ src/styles/index.css                            |   76 [32m+[m[31m-[m
+ 49 files changed, 15696 insertions(+), 4636 deletions(-)

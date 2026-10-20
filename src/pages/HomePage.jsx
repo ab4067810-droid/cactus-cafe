@@ -144,11 +144,6 @@ function HomePage() {
             Freshly made, thoughtfully shared.
           </p>
 
-          <nav className="footer-links" aria-label="Footer navigation">
-            <Link to="/menu">Menu</Link>
-            <Link to="/about">Our story</Link>
-            <Link to="/login">Log in</Link>
-          </nav>
         </div>
       </footer>
     </>

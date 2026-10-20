@@ -57,8 +57,24 @@ function MyReservations() {
   if (loading) {
     return (
       <main className="my-reservations-page">
-        <section className="my-reservations-container">
-          <p>Loading your reservations...</p>
+        <section
+          className="my-reservations-container"
+          aria-busy="true"
+          aria-label="Loading your reservations"
+        >
+          <p className="reservations-loading-status" role="status">
+            Loading your reservations...
+          </p>
+          <div className="reservations-loading-card" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
+          <div className="reservations-loading-card" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
         </section>
       </main>
     );
@@ -68,36 +84,59 @@ function MyReservations() {
     <main className="my-reservations-page">
       <section className="my-reservations-container">
 
-        <div className="my-reservations-header">
-          <p className="reservations-eyebrow">
-            CACTUS CAFE
-          </p>
+        <header className="my-reservations-header">
+          <div className="my-reservations-heading">
+            <p className="reservations-eyebrow">CACTUS CAFE</p>
 
-          <h1>My Reservations</h1>
+            <h1>My Reservations</h1>
 
-          <p>
-            View your current and previous table reservations.
-          </p>
+            <p>
+              View your current and previous table reservations.
+            </p>
+          </div>
 
           <button
+            type="button"
             className="back-button"
             onClick={() => navigate("/customer")}
           >
             ← Back to Dashboard
           </button>
-        </div>
+        </header>
 
         {error && (
-          <div className="reservations-error">
-            {error}
+          <div className="reservations-error" role="alert">
+            <span className="reservations-error-icon" aria-hidden="true">
+              !
+            </span>
+            <div>
+              <strong>We could not load your reservations</strong>
+              <p>{error}</p>
+            </div>
           </div>
         )}
 
         {!error && reservations.length === 0 && (
           <div className="no-reservations">
-            <div className="empty-icon">📅</div>
+            <div className="empty-icon" aria-hidden="true">
+              <svg
+                viewBox="0 0 32 32"
+                width="32"
+                height="32"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <rect x="5" y="8" width="22" height="19" rx="3" />
+                <path d="M10 5v6M22 5v6M5 14h22M11 19h.01M16 19h.01M21 19h.01M11 23h.01M16 23h.01" />
+              </svg>
+            </div>
 
-            <h2>No Reservations Yet</h2>
+            <p className="reservations-eyebrow">YOUR TABLE PLANS</p>
+
+            <h2>No reservations yet</h2>
 
             <p>
               Your table reservations will appear here after
@@ -105,6 +144,8 @@ function MyReservations() {
             </p>
 
             <button
+              type="button"
+              className="make-reservation-button"
               onClick={() => navigate("/reservations")}
             >
               Make a Reservation
@@ -112,7 +153,7 @@ function MyReservations() {
           </div>
         )}
 
-        {reservations.length > 0 && (
+        {!error && reservations.length > 0 && (
           <div className="reservations-list">
 
             {reservations.map((reservation) => (

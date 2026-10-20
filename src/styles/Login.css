@@ -533,6 +533,103 @@
   }
 }
 
+@media (min-width: 768px) {
+  .login-page {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: center;
+    justify-content: initial;
+    min-height: 100vh;
+    padding: 32px 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    isolation: isolate;
+    background: #fff;
+  }
+
+  .login-page::before {
+    position: absolute;
+    z-index: -1;
+    inset: 0 auto 0 0;
+    width: 50%;
+    min-height: 100%;
+    background:
+      linear-gradient(
+        180deg,
+        rgba(19, 35, 25, 0.18) 0%,
+        rgba(19, 35, 25, 0.18) 45%,
+        rgba(19, 35, 25, 0.68) 100%
+      ),
+      url("https://images.unsplash.com/photo-1445116572660-236099ec97a0?auto=format&fit=crop&w=1800&q=90")
+        center / cover no-repeat;
+    content: "";
+  }
+
+  .login-page::after {
+    position: absolute;
+    z-index: 1;
+    bottom: clamp(42px, 8vh, 88px);
+    left: clamp(32px, 6vw, 88px);
+    width: min(38%, 460px);
+    color: rgba(255, 255, 255, 0.94);
+    content:
+      "A little pause, made fresh.\A Thoughtfully brewed, warmly welcomed.";
+    font-size: clamp(1.05rem, 2vw, 1.55rem);
+    font-weight: 650;
+    letter-spacing: -0.025em;
+    line-height: 1.55;
+    white-space: pre-line;
+    pointer-events: none;
+  }
+
+  .login-brand {
+    z-index: 1;
+    top: 30px;
+    left: clamp(28px, 4vw, 58px);
+    color: #fff;
+  }
+
+  .login-card {
+    z-index: 1;
+    grid-column: 2;
+    justify-self: center;
+    width: min(calc(100% - 48px), 430px);
+    margin: 24px;
+    padding: 42px 38px 36px;
+    border: 0;
+    border-radius: 0;
+    background: #fff;
+    box-shadow: none;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .login-page {
+    grid-template-columns: minmax(0, 0.78fr) minmax(0, 1.22fr);
+  }
+
+  .login-page::before {
+    width: 40%;
+    background-position: 56% center;
+  }
+
+  .login-page::after {
+    left: 30px;
+    width: calc(40% - 60px);
+    font-size: clamp(1rem, 2vw, 1.3rem);
+  }
+
+  .login-brand {
+    left: 28px;
+  }
+
+  .login-card {
+    width: min(calc(100% - 40px), 430px);
+    margin: 20px;
+    padding: 38px 34px 32px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .login-close,
   .form-input,

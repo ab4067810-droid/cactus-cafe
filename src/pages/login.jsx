@@ -98,7 +98,7 @@ function Login() {
       }
 
       if (userRole === "customer") {
-        navigate("/customer", { replace: true });
+        navigate("/menu", { replace: true });
         return;
       }
 

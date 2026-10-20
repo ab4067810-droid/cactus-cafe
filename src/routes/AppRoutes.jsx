@@ -1,5 +1,6 @@
 import {
   BrowserRouter,
+  Navigate,
   Routes,
   Route,
   useLocation,
@@ -10,7 +11,6 @@ import MenuPage from "../pages/MenuPage";
 import AboutPage from "../pages/AboutPage";
 import Login from "../pages/login";
 import Navigation from "../components/Navigation";
-import CustomerDashboard from "../pages/CustomerDashboard";
 import CheckoutPage from "../pages/CheckoutPage";
 import MyOrders from "../pages/MyOrders";
 import ReservationsPage from "../pages/ReservationsPage";
@@ -49,7 +49,7 @@ function AppRoutesContent() {
         <Route path="/menu" element={<MenuPage />} />
         <Route path="/about" element={<AboutPage />} />
         <Route path="/login" element={<Login />} />
-        <Route path="/customer" element={<CustomerDashboard />} />
+        <Route path="/customer" element={<Navigate to="/menu" replace />} />
         <Route path="/checkout" element={<CheckoutPage />} />
         <Route path="/my-orders" element={<MyOrders />} />
         <Route path="/reservations" element={<ReservationsPage />} />

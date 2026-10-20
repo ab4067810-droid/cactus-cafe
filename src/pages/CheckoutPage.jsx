@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { httpsCallable } from "firebase/functions";
 
+import { useCart } from "../context/CartContext";
 import { auth, functions } from "../services/firebase";
 import "../styles/CheckoutPage.css";
 
@@ -10,6 +11,8 @@ const formatPrice = (price) =>
     style: "currency",
     currency: "PHP",
   }).format(Number(price) || 0);
+
+const emptyCart = [];
 
 function SummaryItemImage({ item }) {
   const [failedImageUrl, setFailedImageUrl] = useState("");
@@ -34,8 +37,9 @@ function SummaryItemImage({ item }) {
 function CheckoutPage() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { clearCart } = useCart();
 
-  const cart = location.state?.cart || [];
+  const cart = location.state?.cart ?? emptyCart;
 
   const [orderType, setOrderType] = useState("takeout");
   const [customerName, setCustomerName] = useState("");
@@ -121,6 +125,7 @@ function CheckoutPage() {
       });
 
       alert("Order placed successfully! 🌵");
+      clearCart();
       navigate("/customer");
     } catch (error) {
       console.error("Error placing order:", error);
@@ -410,8 +415,12 @@ function CheckoutPage() {
                     <h3>{item.name}</h3>
 
                     <p>
-                      {item.quantity} ×{" "}
-                      {formatPrice(item.price)}
+                      <span className="summary-quantity">
+                        {item.quantity} ×
+                      </span>
+                      <span>
+                        {formatPrice(item.price)} each
+                      </span>
                     </p>
                   </div>
 

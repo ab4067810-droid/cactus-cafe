@@ -4,6 +4,15 @@ import { auth, db } from "../services/firebase";
 import { useNavigate } from "react-router-dom";
 import "../styles/ReservationsPage.css";
 
+const getTodayDate = () => {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+};
+
 function ReservationsPage() {
   const navigate = useNavigate();
 
@@ -33,6 +42,13 @@ function ReservationsPage() {
 
     if (!date || !time) {
       alert("Please select a reservation date and time.");
+      return;
+    }
+
+    if (date < getTodayDate()) {
+      alert(
+        "Reservation date cannot be in the past. Please choose today or a future date."
+      );
       return;
     }
 
@@ -140,6 +156,7 @@ function ReservationsPage() {
                 id="date"
                 type="date"
                 value={date}
+                min={getTodayDate()}
                 onChange={(event) =>
                   setDate(event.target.value)
                 }
