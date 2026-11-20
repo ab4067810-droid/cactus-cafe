@@ -1,0 +1,163 @@
+.admin-menu-sidebar,
+.admin-orders-sidebar,
+.admin-reservations-sidebar,
+.admin-reviews-sidebar,
+.payments-sidebar,
+.admin-users-sidebar {
+  min-height: 0;
+  overflow: hidden;
+  padding-block: 18px 14px;
+}
+
+.admin-menu-brand,
+.admin-orders-brand,
+.admin-reservations-brand,
+.admin-reviews-brand,
+.payments-brand,
+.admin-users-brand {
+  flex: 0 0 auto;
+  margin-bottom: 22px;
+}
+
+.admin-menu-sidebar-label,
+.admin-orders-sidebar-label,
+.admin-reservations-sidebar-label,
+.admin-reviews-sidebar-label,
+.payments-sidebar-label,
+.admin-users-sidebar-label {
+  flex: 0 0 auto;
+  margin-bottom: 8px;
+}
+
+.admin-menu-nav,
+.admin-orders-nav,
+.admin-reservations-nav,
+.admin-reviews-nav,
+.payments-nav,
+.admin-users-nav {
+  min-height: 0;
+  flex: 1 1 auto;
+  align-content: start;
+  gap: 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.admin-menu-nav-link,
+.admin-orders-nav-link,
+.admin-reservations-nav-link,
+.admin-reviews-nav-link,
+.payments-nav-link,
+.admin-users-nav-link {
+  min-height: 40px;
+  flex: 0 0 auto;
+}
+
+.admin-menu-sidebar-footer,
+.admin-orders-sidebar-footer,
+.admin-reservations-sidebar-footer,
+.admin-reviews-sidebar-footer,
+.payments-sidebar-footer,
+.admin-users-sidebar-footer {
+  flex: 0 0 auto;
+  gap: 10px;
+  margin-top: auto;
+}
+
+.admin-menu-sidebar-note,
+.admin-orders-sidebar-note,
+.admin-reservations-sidebar-note,
+.admin-reviews-sidebar-note,
+.payments-sidebar-note,
+.admin-users-sidebar-note {
+  padding: 11px 12px;
+}
+
+.admin-menu-sidebar-note p,
+.admin-orders-sidebar-note p,
+.admin-reservations-sidebar-note p,
+.admin-reviews-sidebar-note p,
+.payments-sidebar-note p,
+.admin-users-sidebar-note p {
+  margin-top: 5px;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.admin-menu-logout,
+.admin-orders-logout,
+.admin-reservations-logout,
+.admin-reviews-logout,
+.payments-logout,
+.admin-users-logout {
+  min-height: 42px;
+  flex: 0 0 auto;
+}
+
+@media (max-height: 640px) {
+  .admin-menu-sidebar,
+  .admin-orders-sidebar,
+  .admin-reservations-sidebar,
+  .admin-reviews-sidebar,
+  .payments-sidebar,
+  .admin-users-sidebar {
+    padding-block: 12px 10px;
+  }
+
+  .admin-menu-brand,
+  .admin-orders-brand,
+  .admin-reservations-brand,
+  .admin-reviews-brand,
+  .payments-brand,
+  .admin-users-brand {
+    min-height: 46px;
+    margin-bottom: 14px;
+  }
+
+  .admin-menu-sidebar-label,
+  .admin-orders-sidebar-label,
+  .admin-reservations-sidebar-label,
+  .admin-reviews-sidebar-label,
+  .payments-sidebar-label,
+  .admin-users-sidebar-label {
+    margin-bottom: 6px;
+  }
+
+  .admin-menu-sidebar-note,
+  .admin-orders-sidebar-note,
+  .admin-reservations-sidebar-note,
+  .admin-reviews-sidebar-note,
+  .payments-sidebar-note,
+  .admin-users-sidebar-note {
+    display: none;
+  }
+
+  .admin-menu-nav,
+  .admin-orders-nav,
+  .admin-reservations-nav,
+  .admin-reviews-nav,
+  .payments-nav,
+  .admin-users-nav {
+    gap: 3px;
+  }
+
+  .admin-menu-nav-link,
+  .admin-orders-nav-link,
+  .admin-reservations-nav-link,
+  .admin-reviews-nav-link,
+  .payments-nav-link,
+  .admin-users-nav-link {
+    min-height: 38px;
+  }
+
+  .admin-menu-logout,
+  .admin-orders-logout,
+  .admin-reservations-logout,
+  .admin-reviews-logout,
+  .payments-logout,
+  .admin-users-logout {
+    min-height: 40px;
+  }
+}

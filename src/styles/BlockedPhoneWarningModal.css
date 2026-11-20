@@ -1,0 +1,264 @@
+.blocked-phone-modal-backdrop {
+  position: fixed;
+  z-index: 2000;
+  inset: 0;
+  display: grid;
+  overflow-y: auto;
+  place-items: center;
+  padding: 24px;
+  background: rgb(18 31 22 / 60%);
+  backdrop-filter: blur(4px);
+}
+
+.blocked-phone-modal {
+  position: relative;
+  width: min(100%, 520px);
+  max-height: min(90vh, 820px);
+  overflow-y: auto;
+  padding: 36px;
+  border: 1px solid #e5e9e5;
+  border-radius: 22px;
+  background: #fff;
+  box-shadow: 0 24px 80px rgb(13 31 19 / 28%);
+  color: #233128;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  animation: blocked-phone-modal-appear 180ms ease-out;
+}
+
+.blocked-phone-modal-close {
+  position: absolute;
+  top: 15px;
+  right: 16px;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid #e7ece8;
+  border-radius: 50%;
+  background: #fff;
+  color: #66736a;
+  font: inherit;
+  font-size: 23px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.blocked-phone-modal-icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 19px;
+  place-items: center;
+  border-radius: 16px;
+  background: #fff0ec;
+  color: #ae4c3e;
+  font-size: 23px;
+  font-weight: 900;
+}
+
+.blocked-phone-modal-eyebrow {
+  margin: 0 0 8px;
+  color: #a64b3f;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.15em;
+}
+
+.blocked-phone-modal h2 {
+  max-width: 16ch;
+  margin: 0;
+  color: #233128;
+  font-size: clamp(24px, 5vw, 32px);
+  font-weight: 820;
+  letter-spacing: -0.055em;
+  line-height: 1.12;
+}
+
+.blocked-phone-modal-number {
+  margin: 12px 0 21px;
+  color: #28734a;
+  font-size: 17px;
+  font-weight: 850;
+  letter-spacing: 0.025em;
+  font-variant-numeric: tabular-nums;
+}
+
+.blocked-phone-modal-reason {
+  padding: 15px 16px;
+  border: 1px solid #f0dfc5;
+  border-radius: 13px;
+  background: #fffaf1;
+}
+
+.blocked-phone-modal-reason strong {
+  color: #765018;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.blocked-phone-modal-reason p {
+  margin: 6px 0 0;
+  color: #4a4236;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.blocked-phone-modal-explanation,
+.restoration-request-pending {
+  margin: 16px 0;
+  color: #647168;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.restoration-request-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 18px 0;
+  padding: 12px 14px;
+  border-radius: 11px;
+  background: #f3f6f3;
+  color: #647168;
+  font-size: 11px;
+  text-transform: capitalize;
+}
+
+.restoration-request-status strong {
+  color: #8a5d19;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.restoration-request-status .request-status-approved {
+  color: #28734a;
+}
+
+.restoration-request-status .request-status-rejected {
+  color: #ad5144;
+}
+
+.restoration-request-form {
+  display: grid;
+  gap: 9px;
+  margin-top: 20px;
+}
+
+.restoration-request-form label {
+  color: #435248;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.restoration-request-form textarea {
+  width: 100%;
+  min-height: 96px;
+  padding: 12px;
+  border: 1px solid #dfe6e0;
+  border-radius: 11px;
+  outline: 0;
+  background: #fbfcfb;
+  color: #233128;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.restoration-request-form textarea:focus {
+  border-color: #28734a;
+  box-shadow: 0 0 0 3px rgb(40 115 74 / 12%);
+}
+
+.restoration-request-submit,
+.restoration-request-error button {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  background: #28734a;
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.restoration-request-submit:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.restoration-request-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0 0;
+  color: #a64b3f;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.restoration-request-error p {
+  margin: 0;
+}
+
+.restoration-request-error button {
+  min-height: 34px;
+  flex: 0 0 auto;
+  background: #a64b3f;
+  font-size: 10px;
+}
+
+.restoration-status-loading {
+  color: #647168;
+  font-size: 11px;
+}
+
+.blocked-phone-modal-close:focus-visible,
+.restoration-request-submit:focus-visible,
+.restoration-request-error button:focus-visible {
+  outline: 3px solid #d98b35;
+  outline-offset: 3px;
+}
+
+@keyframes blocked-phone-modal-appear {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (max-width: 560px) {
+  .blocked-phone-modal-backdrop {
+    padding: 14px;
+  }
+
+  .blocked-phone-modal {
+    padding: 28px 22px;
+    border-radius: 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .blocked-phone-modal {
+    animation: none;
+  }
+}

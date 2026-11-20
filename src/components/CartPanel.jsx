@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { useCart } from "../context/CartContext";
+import { getCartItemKey, useCart } from "../context/CartContext";
 import "../styles/CartPanel.css";
 
 const formatPrice = (price) =>
@@ -30,7 +30,7 @@ function CartItemImage({ item }) {
   );
 }
 
-function CartPanel({ isOpen, onClose, onCheckout }) {
+function CartPanel({ isOpen, onClose, onCheckout, onContinueShopping }) {
   const closeButtonRef = useRef(null);
   const panelRef = useRef(null);
   const { cart, totalItems, increaseQuantity, decreaseQuantity, removeFromCart } =
@@ -136,10 +136,13 @@ function CartPanel({ isOpen, onClose, onCheckout }) {
           <>
             <div className="cart-panel-items">
               {cart.map((item) => (
-                <article className="cart-panel-item" key={item.id}>
+                <article className="cart-panel-item" key={getCartItemKey(item)}>
                   <CartItemImage item={item} />
                   <div className="cart-panel-item-details">
                     <h3>{item.name}</h3>
+                    {item.selectedSize && (
+                      <p className="cart-panel-item-size">{item.selectedSize}</p>
+                    )}
                     <p className="cart-panel-item-price">
                       {formatPrice(item.price)} each
                     </p>
@@ -150,16 +153,16 @@ function CartPanel({ isOpen, onClose, onCheckout }) {
                       >
                         <button
                           type="button"
-                          aria-label={`Decrease ${item.name} quantity`}
-                          onClick={() => decreaseQuantity(item.id)}
+                          aria-label={`Decrease ${item.name}${item.selectedSize ? ` ${item.selectedSize}` : ""} quantity`}
+                          onClick={() => decreaseQuantity(getCartItemKey(item))}
                         >
                           −
                         </button>
                         <span>{item.quantity}</span>
                         <button
                           type="button"
-                          aria-label={`Increase ${item.name} quantity`}
-                          onClick={() => increaseQuantity(item.id)}
+                          aria-label={`Increase ${item.name}${item.selectedSize ? ` ${item.selectedSize}` : ""} quantity`}
+                          onClick={() => increaseQuantity(getCartItemKey(item))}
                         >
                           +
                         </button>
@@ -174,8 +177,8 @@ function CartPanel({ isOpen, onClose, onCheckout }) {
                   <button
                     type="button"
                     className="cart-panel-remove"
-                    aria-label={`Remove ${item.name} from your cart`}
-                    onClick={() => removeFromCart(item.id)}
+                    aria-label={`Remove ${item.name}${item.selectedSize ? ` ${item.selectedSize}` : ""} from your cart`}
+                    onClick={() => removeFromCart(getCartItemKey(item))}
                   >
                     Remove
                   </button>
@@ -218,7 +221,7 @@ function CartPanel({ isOpen, onClose, onCheckout }) {
             <button
               type="button"
               className="cart-panel-continue"
-              onClick={onClose}
+              onClick={onContinueShopping}
             >
               Continue shopping
             </button>

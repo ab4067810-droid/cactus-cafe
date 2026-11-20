@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  addDoc,
   collection,
+  doc,
   getDocs,
   query,
   serverTimestamp,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { auth, db } from "../services/firebase";
+import { maskCustomerName } from "../utils/maskCustomerName";
 import "../styles/MyReviews.css";
 
 const RATING_OPTIONS = [
@@ -39,6 +41,11 @@ const getStatusClass = (status) =>
     .trim()
     .replace(/\s+/g, "-");
 
+const isCompletedOrder = (status) => {
+  const normalizedStatus = String(status || "").trim().toLowerCase();
+  return normalizedStatus.includes("complete") || normalizedStatus === "delivered";
+};
+
 function MyReviews() {
   const navigate = useNavigate();
 
@@ -47,6 +54,8 @@ function MyReviews() {
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState("");
   const [loading, setLoading] = useState(true);
+  const [completedOrderCount, setCompletedOrderCount] = useState(0);
+  const [ordersError, setOrdersError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState("");
@@ -89,6 +98,36 @@ function MyReviews() {
     }
   }, []);
 
+  const loadCompletedOrderCount = useCallback(async (currentUser) => {
+    try {
+      setOrdersError("");
+      const ordersQuery = query(
+        collection(db, "orders"),
+        where("customerId", "==", currentUser.uid)
+      );
+      const snapshot = await getDocs(ordersQuery);
+      const completedCount = snapshot.docs.filter((orderDoc) =>
+        isCompletedOrder(orderDoc.data().status)
+      ).length;
+
+      setCompletedOrderCount(completedCount);
+    } catch (error) {
+      console.error("Error checking completed orders for reviews:", error);
+      setOrdersError(
+        "Unable to verify completed orders. Please try again."
+      );
+    }
+  }, []);
+
+  const loadReviewData = useCallback(async (currentUser) => {
+    setLoading(true);
+    await Promise.all([
+      loadReviews(currentUser),
+      loadCompletedOrderCount(currentUser),
+    ]);
+    setLoading(false);
+  }, [loadCompletedOrderCount, loadReviews]);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(
       auth,
@@ -99,13 +138,12 @@ function MyReviews() {
         }
 
         setUser(currentUser);
-        await loadReviews(currentUser);
-        setLoading(false);
+        await loadReviewData(currentUser);
       }
     );
 
     return () => unsubscribe();
-  }, [loadReviews, navigate]);
+  }, [loadReviewData, navigate]);
 
   const averageRating = useMemo(() => {
     if (reviews.length === 0) {
@@ -125,9 +163,30 @@ function MyReviews() {
 
     setMessage("");
     setMessageType("");
+    if (submitting) return;
 
     if (!user) {
       navigate("/login");
+      return;
+    }
+
+    if (ordersError || loadError) {
+      setMessage("Unable to verify review eligibility. Please try again.");
+      setMessageType("error");
+      return;
+    }
+
+    if (completedOrderCount === 0) {
+      setMessage("Complete at least one order before leaving feedback.");
+      setMessageType("error");
+      return;
+    }
+
+    if (reviews.length >= completedOrderCount) {
+      setMessage(
+        "You have already submitted feedback for each completed order."
+      );
+      setMessageType("error");
       return;
     }
 
@@ -140,23 +199,39 @@ function MyReviews() {
     try {
       setSubmitting(true);
 
-      await addDoc(collection(db, "reviews"), {
+      const reviewRef = doc(collection(db, "reviews"));
+      const publicReviewRef = doc(db, "publicReviews", reviewRef.id);
+      const trimmedComment = comment.trim();
+      const photoURL =
+        typeof user.photoURL === "string" ? user.photoURL : "";
+      const batch = writeBatch(db);
+
+      batch.set(reviewRef, {
         customerId: user.uid,
         customerEmail: user.email || "",
+        customerName: user.displayName || "",
+        photoURL,
         rating: Number(rating),
-        comment: comment.trim(),
-        status: "Pending",
+        comment: trimmedComment,
+        status: "Approved",
         createdAt: serverTimestamp(),
       });
+      batch.set(publicReviewRef, {
+        rating: Number(rating),
+        comment: trimmedComment,
+        createdAt: serverTimestamp(),
+        displayName: maskCustomerName(user.displayName, user.email),
+        photoURL,
+      });
+
+      await batch.commit();
 
       setComment("");
       setRating(5);
 
       await loadReviews(user);
 
-      setMessage(
-        "Thank you. Your review has been submitted for approval."
-      );
+      setMessage("Thank you. Your review has been published.");
       setMessageType("success");
     } catch (error) {
       console.error("Error submitting review:", error);
@@ -170,13 +245,33 @@ function MyReviews() {
     }
   };
 
+  const handleReviewDataRetry = () => {
+    if (user) {
+      loadReviewData(user);
+    }
+  };
+
   if (loading) {
     return (
       <main className="my-reviews-page">
-        <section className="reviews-container reviews-loading">
-          <div className="reviews-loading-line short" />
-          <div className="reviews-loading-line large" />
-          <div className="reviews-loading-card" />
+        <section
+          className="reviews-container reviews-loading"
+          aria-busy="true"
+          aria-label="Loading your reviews"
+        >
+          <div className="reviews-loading-heading">
+            <div className="reviews-loading-line short" />
+            <div className="reviews-loading-line large" />
+            <div className="reviews-loading-line medium" />
+          </div>
+          <div className="reviews-loading-overview" />
+          <div className="reviews-loading-layout">
+            <div className="reviews-loading-card form-skeleton" />
+            <div className="reviews-loading-card list-skeleton" />
+          </div>
+          <p className="reviews-loading-label" role="status">
+            Loading your review history...
+          </p>
         </section>
       </main>
     );
@@ -189,11 +284,11 @@ function MyReviews() {
           <div>
             <p className="reviews-eyebrow">CACTUS CAFE</p>
 
-            <h1>Your cafe experience matters.</h1>
+            <h1>Tell us about your Cactus Café moments.</h1>
 
             <p>
-              Share what you loved, what could improve, and help
-              us make every visit better.
+              Your feedback helps us make every cup, bite, and visit a little
+              better. Share your experience and keep track of your reviews here.
             </p>
           </div>
 
@@ -227,24 +322,10 @@ function MyReviews() {
 
           <div className="overview-note">
             <span>✦</span>
-            Reviews are reviewed by our cafe team before
-            publication.
+            Submit one review for each completed order. Reviews are published
+            immediately.
           </div>
         </section>
-
-        {loadError && (
-          <div className="reviews-error" role="alert">
-            <span className="message-icon">!</span>
-            <p>{loadError}</p>
-
-            <button
-              type="button"
-              onClick={() => user && loadReviews(user)}
-            >
-              Try again
-            </button>
-          </div>
-        )}
 
         <div className="reviews-layout">
           <section className="review-form-section">
@@ -269,70 +350,117 @@ function MyReviews() {
               </div>
             )}
 
-            <form onSubmit={handleSubmit}>
-              <fieldset className="review-form-group">
-                <legend>Your rating</legend>
-
-                <div className="rating-picker">
-                  {RATING_OPTIONS.map((option) => (
-                    <button
-                      type="button"
-                      key={option.value}
-                      className={`rating-option ${
-                        rating === option.value ? "selected" : ""
-                      }`}
-                      onClick={() => setRating(option.value)}
-                      aria-label={`${option.value} out of 5, ${option.label}`}
-                      aria-pressed={rating === option.value}
-                    >
-                      <span className="rating-number">
-                        {option.value}
-                      </span>
-
-                      <span className="rating-stars">
-                        {"★".repeat(option.value)}
-                      </span>
-
-                      <span className="rating-label">
-                        {option.label}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </fieldset>
-
-              <div className="review-form-group">
-                <label htmlFor="comment">
-                  Your review
-                </label>
-
-                <textarea
-                  id="comment"
-                  value={comment}
-                  onChange={(event) =>
-                    setComment(event.target.value)
-                  }
-                  placeholder="Tell us about your coffee, meal, or cafe experience..."
-                  rows="6"
-                  maxLength="500"
-                  required
-                />
-
-                <div className="character-count">
-                  {comment.length}/500
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                className="submit-review-button"
-                disabled={submitting}
+            {ordersError ? (
+              <div
+                className="review-eligibility-message error"
+                role="alert"
               >
-                {submitting
-                  ? "Submitting your review..."
-                  : "Submit review"}
-              </button>
-            </form>
+                <p>{ordersError}</p>
+                <button
+                  type="button"
+                  onClick={handleReviewDataRetry}
+                >
+                  Try again
+                </button>
+              </div>
+            ) : loadError ? (
+              <div
+                className="review-eligibility-message error"
+                role="alert"
+              >
+                <p>Unable to verify your review history. Please try again.</p>
+                <button
+                  type="button"
+                  onClick={handleReviewDataRetry}
+                >
+                  Try again
+                </button>
+              </div>
+            ) : completedOrderCount === 0 ? (
+              <div className="review-eligibility-message" role="status">
+                <p>
+                  Complete at least one order before leaving customer feedback.
+                </p>
+                <Link className="review-eligibility-link" to="/menu">
+                  Browse the menu
+                </Link>
+              </div>
+            ) : reviews.length >= completedOrderCount ? (
+              <div className="review-eligibility-message" role="status">
+                <p>
+                  You have already submitted feedback for each completed order.
+                  You can post again after another completed order.
+                </p>
+              </div>
+            ) : (
+              <form onSubmit={handleSubmit}>
+                <fieldset className="review-form-group">
+                  <legend>Your rating</legend>
+
+                  <div className="rating-picker">
+                    {RATING_OPTIONS.map((option) => (
+                      <button
+                        type="button"
+                        key={option.value}
+                        className={`rating-option ${
+                          rating === option.value ? "selected" : ""
+                        }`}
+                        onClick={() => setRating(option.value)}
+                        aria-label={`${option.value} out of 5, ${option.label}`}
+                        aria-pressed={rating === option.value}
+                      >
+                        <span className="rating-number">
+                          {option.value}
+                        </span>
+
+                        <span className="rating-stars">
+                          {"★".repeat(option.value)}
+                        </span>
+
+                        <span className="rating-label">
+                          {option.label}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+
+                  <p className="rating-hint">
+                    {RATING_OPTIONS.find((option) => option.value === rating)?.label}
+                  </p>
+                </fieldset>
+
+                <div className="review-form-group">
+                  <label htmlFor="comment">Your review</label>
+
+                  <textarea
+                    id="comment"
+                    value={comment}
+                    onChange={(event) =>
+                      setComment(event.target.value)
+                    }
+                    placeholder="Tell us about your coffee, meal, or cafe experience..."
+                    rows="6"
+                    maxLength="500"
+                    aria-describedby="review-character-count"
+                    required
+                  />
+
+                  <div className="character-count" id="review-character-count">
+                    {comment.length}/500
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="submit-review-button"
+                  disabled={submitting}
+                >
+                  {submitting
+                    ? "Submitting your review..."
+                    : "Submit review"}
+                </button>
+              </form>
+            )}
           </section>
 
           <section className="existing-reviews">
@@ -348,7 +476,19 @@ function MyReviews() {
               </span>
             </div>
 
-            {reviews.length === 0 ? (
+            {loadError ? (
+              <div className="reviews-error" role="alert">
+                <span className="message-icon">!</span>
+                <p>{loadError}</p>
+
+                <button
+                  type="button"
+                  onClick={handleReviewDataRetry}
+                >
+                  Try again
+                </button>
+              </div>
+            ) : reviews.length === 0 ? (
               <div className="no-reviews">
                 <div className="empty-review-icon">★</div>
 
@@ -361,49 +501,59 @@ function MyReviews() {
               </div>
             ) : (
               <div className="reviews-list">
-                {reviews.map((review) => (
-                  <article
-                    className="review-card"
-                    key={review.id}
-                  >
-                    <div className="review-card-header">
-                      <div>
-                        <div className="review-stars">
-                          {"★".repeat(Number(review.rating || 0))}
-                          <span className="empty-stars">
-                            {"★".repeat(
-                              5 - Number(review.rating || 0)
-                            )}
-                          </span>
+                {reviews.map((review) => {
+                  const status = review.status || "Pending";
+                  const reviewRating = Math.min(
+                    5,
+                    Math.max(0, Number(review.rating) || 0)
+                  );
+
+                  return (
+                    <article className="review-card" key={review.id}>
+                      <div className="review-card-header">
+                        <div className="review-rating-date">
+                          <div
+                            className="review-rating"
+                            aria-label={`Rating: ${review.rating} out of 5`}
+                          >
+                            <span className="review-stars" aria-hidden="true">
+                              {"★".repeat(Math.round(reviewRating))}
+                              <span className="empty-stars">
+                                {"★".repeat(5 - Math.round(reviewRating))}
+                              </span>
+                            </span>
+                            <strong>{review.rating}/5</strong>
+                          </div>
+
+                          <p className="review-date">
+                            <span>Submitted</span>
+                            {formatDate(review.createdAt)}
+                          </p>
                         </div>
 
-                        <p className="review-date">
-                          {formatDate(review.createdAt)}
-                        </p>
+                        <span
+                          className={`review-status status-${getStatusClass(
+                            status
+                          )}`}
+                        >
+                          {status}
+                        </span>
                       </div>
 
-                      <span
-                        className={`review-status status-${getStatusClass(
-                          review.status
-                        )}`}
-                      >
-                        {review.status || "Pending"}
-                      </span>
-                    </div>
+                      <p className="review-comment">“{review.comment}”</p>
 
-                    <p className="review-comment">
-                      “{review.comment}”
-                    </p>
-
-                    <div className="review-card-footer">
-                      <span>
-                        {review.status === "Approved"
-                          ? "Published review"
-                          : "Awaiting cafe review"}
-                      </span>
-                    </div>
-                  </article>
-                ))}
+                      <div className="review-card-footer">
+                        <span>
+                          {status === "Approved"
+                            ? "Published review"
+                            : status === "Rejected"
+                              ? "Not approved for publication"
+                              : "Awaiting café review"}
+                        </span>
+                      </div>
+                    </article>
+                  );
+                })}
               </div>
             )}
           </section>

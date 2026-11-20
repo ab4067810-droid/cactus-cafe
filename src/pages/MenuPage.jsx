@@ -1,8 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { collection, getDocs } from "firebase/firestore";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  onSnapshot,
+  serverTimestamp,
+  setDoc,
+} from "firebase/firestore";
+import { useNavigate } from "react-router-dom";
 
+import { useAuth } from "../context/Authcontext";
 import { useCart } from "../context/CartContext";
-import { db } from "../services/firebase";
+import { auth, db } from "../services/firebase";
+import SiteFooter from "../components/SiteFooter";
 import "../styles/MenuPage.css";
 
 const formatPrice = (price) =>
@@ -11,21 +22,92 @@ const formatPrice = (price) =>
     currency: "PHP",
   }).format(Number(price) || 0);
 
+const drinkSizes = ["8oz", "12oz", "16oz"];
+
+const getSizePrices = (item) => {
+  const sizes = item?.sizes;
+  if (
+    !sizes
+    || typeof sizes !== "object"
+    || Array.isArray(sizes)
+    || drinkSizes.some((size) => (
+      !Object.hasOwn(sizes, size)
+      || typeof sizes[size] !== "number"
+      || !Number.isFinite(sizes[size])
+      || sizes[size] < 0
+    ))
+  ) {
+    return null;
+  }
+  return sizes;
+};
+
 const fetchMenuItems = async () => {
   const snapshot = await getDocs(collection(db, "menuItems"));
   return snapshot.docs.map((menuDoc) => ({
-    id: menuDoc.id,
     ...menuDoc.data(),
+    id: menuDoc.id,
   }));
 };
 
-function ProductCard({ item, onAdd, featured = false }) {
+function FavoriteToggleButton({
+  item,
+  isFavorite,
+  isPending,
+  onToggle,
+}) {
+  return (
+    <button
+      type="button"
+      className={`menu-favorite-toggle${isFavorite ? " is-favorite" : ""}`}
+      aria-label={
+        isFavorite
+          ? `Remove ${item.name} from favorites`
+          : `Add ${item.name} to favorites`
+      }
+      aria-pressed={isFavorite}
+      disabled={isPending}
+      onClick={() => onToggle(item.id)}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z" />
+      </svg>
+    </button>
+  );
+}
+
+function ProductCard({
+  item,
+  onAdd,
+  actionLabel,
+  isFavorite,
+  isFavoritePending,
+  onToggleFavorite,
+  featured = false,
+}) {
   const [failedImageUrl, setFailedImageUrl] = useState("");
+  const [selectedSize, setSelectedSize] = useState("8oz");
+  const sizePrices = getSizePrices(item);
+  const selectedPrice = sizePrices ? sizePrices[selectedSize] : item.price;
+  const cartItem = sizePrices
+    ? { ...item, price: selectedPrice, selectedSize }
+    : item;
   const imageUrl =
     typeof item.imageUrl === "string" ? item.imageUrl.trim() : "";
 
   return (
     <article className={`menu-card ${featured ? "featured-product" : ""}`}>
+      <FavoriteToggleButton
+        item={item}
+        isFavorite={isFavorite}
+        isPending={isFavoritePending}
+        onToggle={onToggleFavorite}
+      />
+
       {imageUrl && failedImageUrl !== imageUrl ? (
         <img
           className="product-image"
@@ -66,19 +148,47 @@ function ProductCard({ item, onAdd, featured = false }) {
 
         <div className="product-card-footer">
           <strong className="menu-price">
-            {formatPrice(item.price)}
+            {formatPrice(selectedPrice)}
           </strong>
 
-          <AddToCartButton
-            item={item}
-            onAdd={onAdd}
-            className="add-to-cart-button"
-            actionLabel="Add to cart"
-            disabled={item.available === false}
-          />
+          <div className="product-card-order">
+            {sizePrices && (
+              <SizeSelector
+                item={item}
+                selectedSize={selectedSize}
+                onSelectSize={setSelectedSize}
+              />
+            )}
+            <AddToCartButton
+              item={cartItem}
+              onAdd={onAdd}
+              className="add-to-cart-button"
+              actionLabel={actionLabel}
+              disabled={item.available === false}
+            />
+          </div>
         </div>
       </div>
     </article>
+  );
+}
+
+function SizeSelector({ item, selectedSize, onSelectSize }) {
+  return (
+    <div className="size-selector" role="group" aria-label={`${item.name} size`}>
+      {drinkSizes.map((size) => (
+        <button
+          key={size}
+          type="button"
+          className={`size-selector-option${selectedSize === size ? " is-selected" : ""}`}
+          aria-label={`Select ${size} for ${item.name}`}
+          aria-pressed={selectedSize === size}
+          onClick={() => onSelectSize(size)}
+        >
+          {size}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -98,7 +208,8 @@ function AddToCartButton({
   );
 
   const handleAdd = () => {
-    onAdd(item);
+    if (onAdd(item) === false) return;
+
     setWasAdded(true);
     window.clearTimeout(feedbackTimeout.current);
     feedbackTimeout.current = window.setTimeout(
@@ -114,7 +225,7 @@ function AddToCartButton({
       aria-label={
         wasAdded
           ? `${item.name} added to your order`
-          : `Add ${item.name} to your order`
+          : `Add ${item.name}${item.selectedSize ? ` (${item.selectedSize})` : ""} to your order`
       }
       onClick={handleAdd}
       disabled={disabled}
@@ -126,10 +237,25 @@ function AddToCartButton({
   );
 }
 
-function FeaturedHero({ item, onAdd, isActive, slideDirection, slideKey }) {
+function FeaturedHero({
+  item,
+  onAdd,
+  isFavorite,
+  isFavoritePending,
+  onToggleFavorite,
+  isActive,
+  slideDirection,
+  slideKey,
+}) {
   const imageUrl =
     typeof item.imageUrl === "string" ? item.imageUrl.trim() : "";
   const [failedImageUrl, setFailedImageUrl] = useState("");
+  const [selectedSize, setSelectedSize] = useState("8oz");
+  const sizePrices = getSizePrices(item);
+  const selectedPrice = sizePrices ? sizePrices[selectedSize] : item.price;
+  const cartItem = sizePrices
+    ? { ...item, price: selectedPrice, selectedSize }
+    : item;
 
   return (
     <section
@@ -153,18 +279,33 @@ function FeaturedHero({ item, onAdd, isActive, slideDirection, slideKey }) {
           )}
           <h2>{item.name || "Café favorite"}</h2>
           <strong className="featured-hero-price">
-            {formatPrice(item.price)}
+            {formatPrice(selectedPrice)}
           </strong>
         </div>
 
         <div className="featured-hero-actions">
-          <AddToCartButton
+          <FavoriteToggleButton
             item={item}
-            onAdd={onAdd}
-            className="featured-hero-order"
-            actionLabel="Order Now"
-            disabled={item.available === false}
+            isFavorite={isFavorite}
+            isPending={isFavoritePending}
+            onToggle={onToggleFavorite}
           />
+          <div className="featured-hero-order-group">
+            {sizePrices && (
+              <SizeSelector
+                item={item}
+                selectedSize={selectedSize}
+                onSelectSize={setSelectedSize}
+              />
+            )}
+            <AddToCartButton
+              item={cartItem}
+              onAdd={onAdd}
+              className="featured-hero-order"
+              actionLabel="Order Now"
+              disabled={item.available === false}
+            />
+          </div>
           <a className="featured-hero-explore" href="#menu-catalog">
             Explore Menu
           </a>
@@ -198,7 +339,13 @@ function FeaturedHero({ item, onAdd, isActive, slideDirection, slideKey }) {
   );
 }
 
-function FeaturedHeroCarousel({ items, onAdd }) {
+function FeaturedHeroCarousel({
+  items,
+  onAdd,
+  favoriteIds,
+  pendingFavoriteIds,
+  onToggleFavorite,
+}) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [slideDirection, setSlideDirection] = useState("right");
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
@@ -261,6 +408,9 @@ function FeaturedHeroCarousel({ items, onAdd }) {
           key={activeItem.id}
           item={activeItem}
           onAdd={onAdd}
+          isFavorite={favoriteIds.has(activeItem.id)}
+          isFavoritePending={pendingFavoriteIds.has(activeItem.id)}
+          onToggleFavorite={onToggleFavorite}
           isActive
           slideDirection={slideDirection}
           slideKey={activeItem.id}
@@ -316,10 +466,95 @@ function MenuPage() {
   const [menuItems, setMenuItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [favoriteIds, setFavoriteIds] = useState(() => new Set());
+  const [favoriteOwnerId, setFavoriteOwnerId] = useState("");
+  const [pendingFavoriteIds, setPendingFavoriteIds] = useState(
+    () => new Set()
+  );
+  const [favoritesError, setFavoritesError] = useState("");
   const { addToCart } = useCart();
+  const { user } = useAuth();
+  const navigate = useNavigate();
 
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [searchTerm, setSearchTerm] = useState("");
+
+  useEffect(() => {
+    if (!user?.uid || auth.currentUser?.uid !== user.uid) {
+      return undefined;
+    }
+
+    return onSnapshot(
+      collection(db, "users", user.uid, "favorites"),
+      (snapshot) => {
+        setFavoriteIds(new Set(snapshot.docs.map((favorite) => favorite.id)));
+        setFavoriteOwnerId(user.uid);
+        setFavoritesError("");
+      },
+      (favoriteError) => {
+        console.error("Error loading customer favorites:", favoriteError);
+        setFavoritesError(
+          "Your saved favorites could not be loaded. Please try again."
+        );
+      }
+    );
+  }, [user?.uid]);
+
+  const handleToggleFavorite = async (itemId) => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      navigate("/login");
+      return;
+    }
+
+    if (pendingFavoriteIds.has(itemId)) return;
+
+    setPendingFavoriteIds((currentIds) => new Set(currentIds).add(itemId));
+    setFavoritesError("");
+
+    try {
+      const favoriteRef = doc(
+        db,
+        "users",
+        currentUser.uid,
+        "favorites",
+        itemId
+      );
+      if (
+        favoriteOwnerId === currentUser.uid &&
+        favoriteIds.has(itemId)
+      ) {
+        await deleteDoc(favoriteRef);
+      } else {
+        await setDoc(
+          favoriteRef,
+          { itemId, updatedAt: serverTimestamp() },
+          { merge: true }
+        );
+      }
+    } catch (favoriteError) {
+      console.error("Error updating customer favorite:", favoriteError);
+      setFavoritesError(
+        "We couldn't update that favorite. Please try again."
+      );
+    } finally {
+      setPendingFavoriteIds((currentIds) => {
+        const nextIds = new Set(currentIds);
+        nextIds.delete(itemId);
+        return nextIds;
+      });
+    }
+  };
+
+  const handleAddToCart = (item) => {
+    if (!user) {
+      navigate("/login");
+      return false;
+    }
+
+    addToCart(item);
+    return true;
+  };
 
   const loadMenuItems = async () => {
     setLoading(true);
@@ -440,127 +675,154 @@ function MenuPage() {
 
   if (loading) {
     return (
-      <main className="menu-page">
-        <section className="menu-header menu-header-loading">
-          <p className="menu-eyebrow">CACTUS CAFE MENU</p>
-          <h1>Good things are on the way.</h1>
-          <p>We’re getting today’s menu ready for you.</p>
-        </section>
+      <>
+        <main className="menu-page">
+          <section className="menu-header menu-header-loading">
+            <p className="menu-eyebrow">CACTUS CAFE MENU</p>
+            <h1>Good things are on the way.</h1>
+            <p>We’re getting today’s menu ready for you.</p>
+          </section>
 
-        <section className="menu-grid loading-grid">
-          {[1, 2, 3, 4].map((item) => (
-            <div className="menu-skeleton" key={item} />
-          ))}
-        </section>
-      </main>
+          <section className="menu-grid loading-grid">
+            {[1, 2, 3, 4].map((item) => (
+              <div className="menu-skeleton" key={item} />
+            ))}
+          </section>
+        </main>
+        <SiteFooter />
+      </>
     );
   }
 
   if (error) {
     return (
-      <main className="menu-page">
-        <section className="menu-error" role="alert">
-          <div className="empty-icon" aria-hidden="true">!</div>
-          <p className="menu-eyebrow">A LITTLE CAFE PAUSE</p>
-          <h1>Our menu couldn’t load.</h1>
-          <p>{error}</p>
-          <button
-            type="button"
-            className="checkout-button"
-            onClick={retryMenuLoad}
-          >
-            Try again
-          </button>
-        </section>
-      </main>
+      <>
+        <main className="menu-page">
+          <section className="menu-error" role="alert">
+            <div className="empty-icon" aria-hidden="true">!</div>
+            <p className="menu-eyebrow">A LITTLE CAFE PAUSE</p>
+            <h1>Our menu couldn’t load.</h1>
+            <p>{error}</p>
+            <button
+              type="button"
+              className="checkout-button"
+              onClick={retryMenuLoad}
+            >
+              Try again
+            </button>
+          </section>
+        </main>
+        <SiteFooter />
+      </>
     );
   }
 
   return (
-    <main className="menu-page">
-      {showFeatured && featuredItems.length > 0 && (
-        <FeaturedHeroCarousel items={featuredItems} onAdd={addToCart} />
-      )}
-
-      <section className="menu-toolbar" id="menu-catalog">
-        <div
-          className="category-tabs"
-          role="group"
-          aria-label="Filter by food category"
-        >
-          {categories.map((category) => (
-            <button
-              type="button"
-              key={category}
-              aria-pressed={selectedCategory === category}
-              className={`category-tab ${
-                selectedCategory === category ? "active" : ""
-              }`}
-              onClick={() => setSelectedCategory(category)}
-            >
-              {category}
-            </button>
-          ))}
-        </div>
-
-        <label className="menu-search">
-          <span className="search-icon" aria-hidden="true">⌕</span>
-          <span className="visually-hidden">Search the menu</span>
-
-          <input
-            type="search"
-            placeholder="Search coffee, food, or drinks"
-            value={searchTerm}
-            onChange={(event) =>
-              setSearchTerm(event.target.value)
-            }
+    <>
+      <main className="menu-page">
+        {showFeatured && featuredItems.length > 0 && (
+          <FeaturedHeroCarousel
+            items={featuredItems}
+            onAdd={handleAddToCart}
+            favoriteIds={favoriteIds}
+            pendingFavoriteIds={pendingFavoriteIds}
+            onToggleFavorite={handleToggleFavorite}
           />
-        </label>
-      </section>
+        )}
 
-      {(catalogItems.length > 0 || !showFeatured) && (
-        <section className="product-section">
-          <div className="section-heading">
-            <div>
-              <p className="menu-eyebrow">CACTUS CAFÉ MENU</p>
-              <h2>{showFeatured ? "More to explore" : "Explore the menu"}</h2>
-            </div>
-
-            <span className="product-count">
-              {catalogItems.length}{" "}
-              {catalogItems.length === 1 ? "item" : "items"}
-            </span>
+        <section className="menu-toolbar" id="menu-catalog">
+          <div
+            className="category-tabs"
+            role="group"
+            aria-label="Filter by food category"
+          >
+            {categories.map((category) => (
+              <button
+                type="button"
+                key={category}
+                aria-pressed={selectedCategory === category}
+                className={`category-tab ${
+                  selectedCategory === category ? "active" : ""
+                }`}
+                onClick={() => setSelectedCategory(category)}
+              >
+                {category}
+              </button>
+            ))}
           </div>
 
-          {visibleItems.length === 0 ? (
-            <section className="menu-empty">
-              <div className="empty-icon" aria-hidden="true">⌕</div>
-              <h2>
-                {menuItems.length === 0
-                  ? "Our menu is being refreshed"
-                  : "No products found"}
-              </h2>
-              <p>
-                {menuItems.length === 0
-                  ? "Please check back soon for today’s café favorites."
-                  : "Try another category or search for something else."}
-              </p>
-            </section>
-          ) : (
-            <div className="menu-grid">
-              {catalogItems.map((item) => (
-                <ProductCard
-                  key={item.id}
-                  item={item}
-                  onAdd={addToCart}
-                />
-              ))}
-            </div>
-          )}
-        </section>
-      )}
+          <label className="menu-search">
+            <span className="search-icon" aria-hidden="true">⌕</span>
+            <span className="visually-hidden">Search the menu</span>
 
-    </main>
+            <input
+              type="search"
+              placeholder="Search coffee, food, or drinks"
+              value={searchTerm}
+              onChange={(event) =>
+                setSearchTerm(event.target.value)
+              }
+            />
+          </label>
+        </section>
+
+        {user?.uid && favoritesError && (
+          <p className="menu-favorites-error" role="alert">
+            {favoritesError}
+          </p>
+        )}
+
+        {(catalogItems.length > 0 || !showFeatured) && (
+          <section className="product-section">
+            <div className="section-heading">
+              <div>
+                <p className="menu-eyebrow">CACTUS CAFÉ MENU</p>
+                <h2>{showFeatured ? "More to explore" : "Explore the menu"}</h2>
+              </div>
+
+              <span className="product-count">
+                {catalogItems.length}{" "}
+                {catalogItems.length === 1 ? "item" : "items"}
+              </span>
+            </div>
+
+            {visibleItems.length === 0 ? (
+              <section className="menu-empty">
+                <div className="empty-icon" aria-hidden="true">⌕</div>
+                <h2>
+                  {menuItems.length === 0
+                    ? "Our menu is being refreshed"
+                    : "No products found"}
+                </h2>
+                <p>
+                  {menuItems.length === 0
+                    ? "Please check back soon for today’s café favorites."
+                    : "Try another category or search for something else."}
+                </p>
+              </section>
+            ) : (
+              <div className="menu-grid">
+                {catalogItems.map((item) => (
+                  <ProductCard
+                    key={item.id}
+                    item={item}
+                    onAdd={handleAddToCart}
+                    actionLabel={user ? "Add to Cart" : "Order Now"}
+                    isFavorite={
+                      favoriteOwnerId === user?.uid && favoriteIds.has(item.id)
+                    }
+                    isFavoritePending={pendingFavoriteIds.has(item.id)}
+                    onToggleFavorite={handleToggleFavorite}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+      </main>
+      <SiteFooter />
+    </>
   );
 }
 

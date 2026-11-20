@@ -198,6 +198,45 @@
   height: 21px;
 }
 
+.navbar-favorites-link {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  background: var(--color-white);
+  color: #788078;
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease,
+    color 180ms ease,
+    transform 180ms ease;
+}
+
+.navbar-favorites-link svg {
+  width: 21px;
+  height: 21px;
+}
+
+.navbar-favorites-link:hover {
+  border-color: #dc3545;
+  background: #fff6f6;
+  color: #dc3545;
+  transform: translateY(-1px);
+}
+
+.navbar-favorites-link.active {
+  border-color: #f0c5c9;
+  background: #fff2f3;
+  color: #dc3545;
+}
+
+.navbar-favorites-link.active svg {
+  fill: currentColor;
+}
+
 .navbar-cart-announcement {
   position: absolute;
   width: 1px;
@@ -278,9 +317,28 @@
   box-shadow: 0 0 0 3px rgba(40, 115, 74, 0.1);
 }
 
-.navbar-account-trigger svg {
-  width: 22px;
-  height: 22px;
+.navbar-account-avatar {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: var(--color-white);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.navbar-account-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.navbar-account-avatar svg {
+  width: 19px;
+  height: 19px;
 }
 
 .navbar-account-menu {
@@ -349,6 +407,16 @@
   transition:
     background-color 150ms ease,
     color 150ms ease;
+}
+
+.navbar-unread-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  margin-left: 1px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-white);
 }
 
 .navbar-account-icon {
@@ -463,6 +531,7 @@
 .navbar-toggle:focus-visible,
 .navbar-account-trigger:focus-visible,
 .navbar-cart-link:focus-visible,
+.navbar-favorites-link:focus-visible,
 .navbar-account-link:focus-visible,
 .navbar-account-logout:focus-visible {
   outline: 3px solid var(--color-focus);
@@ -559,6 +628,10 @@
   }
 
   .navbar-cart-link {
+    transition: none;
+  }
+
+  .navbar-favorites-link {
     transition: none;
   }
 

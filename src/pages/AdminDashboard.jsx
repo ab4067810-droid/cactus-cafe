@@ -147,8 +147,8 @@ function AdminDashboard() {
         <button
           type="button"
           className="admin-brand"
-          onClick={() => navigate("/admin")}
-          aria-label="Go to admin dashboard"
+          onClick={() => navigate("/admin/menu")}
+          aria-label="Go to menu management"
         >
           <span className="brand-mark">🌵</span>
 

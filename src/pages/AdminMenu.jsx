@@ -1,18 +1,28 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  addDoc,
   collection,
-  deleteDoc,
   doc,
   getDocs,
-  serverTimestamp,
-  updateDoc,
+  onSnapshot,
 } from "firebase/firestore";
-import { onAuthStateChanged } from "firebase/auth";
-import { useNavigate } from "react-router-dom";
+import { onAuthStateChanged, signOut } from "firebase/auth";
+import { NavLink, useNavigate } from "react-router-dom";
 
 import { auth, db } from "../services/firebase";
+import {
+  createMenuWriteService,
+  MenuWriteConflictError,
+} from "../services/menuWriteService";
 import "../styles/AdminMenu.css";
+import "../styles/AdminSidebar.css";
+
+const menuWriteService = createMenuWriteService(db);
+const drinkSizes = ["8oz", "12oz", "16oz"];
+const isSizeVariantCategory = (value) => (
+  ["soda", "milktea"].includes(
+    String(value || "").trim().toLowerCase().replace(/\s+/g, ""),
+  )
+);
 
 const formatPrice = (price) =>
   new Intl.NumberFormat("en-PH", {
@@ -26,16 +36,28 @@ function AdminMenu() {
   const [menuItems, setMenuItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
+  const [updatingItemIds, setUpdatingItemIds] = useState(() => new Set());
+  const [feedback, setFeedback] = useState(null);
+  const [migrationState, setMigrationState] = useState(null);
+  const [migrationStatusError, setMigrationStatusError] = useState(false);
+  const [migrationOperatorEnabled, setMigrationOperatorEnabled] = useState(false);
 
   const [name, setName] = useState("");
   const [category, setCategory] = useState("");
   const [description, setDescription] = useState("");
   const [price, setPrice] = useState("");
+  const [sizePrices, setSizePrices] = useState({
+    "8oz": "",
+    "12oz": "",
+    "16oz": "",
+  });
   const [imageUrl, setImageUrl] = useState("");
   const [featured, setFeatured] = useState(false);
   const [popular, setPopular] = useState(false);
@@ -43,6 +65,12 @@ function AdminMenu() {
 
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
+  const [selectedAvailability, setSelectedAvailability] = useState("all");
+  const menuWritesLocked = migrationStatusError
+    || (
+      migrationState !== "ready"
+      && !(migrationState === "migrating" && migrationOperatorEnabled)
+    );
 
   const loadMenuItems = useCallback(async () => {
     try {
@@ -67,13 +95,53 @@ function AdminMenu() {
   }, []);
 
   useEffect(() => {
+    let unsubscribeMigration = null;
+    let unsubscribeMigrationOperator = null;
     const unsubscribe = onAuthStateChanged(
       auth,
       async (currentUser) => {
         if (!currentUser) {
+          unsubscribeMigration?.();
+          unsubscribeMigration = null;
+          unsubscribeMigrationOperator?.();
+          unsubscribeMigrationOperator = null;
+          setMigrationState(null);
+          setMigrationOperatorEnabled(false);
           navigate("/login");
           return;
         }
+
+        unsubscribeMigration?.();
+        unsubscribeMigrationOperator?.();
+        setMigrationState(null);
+        setMigrationStatusError(false);
+        setMigrationOperatorEnabled(false);
+        unsubscribeMigration = onSnapshot(
+          doc(db, "menuControl/migration"),
+          (snapshot) => {
+            setMigrationState(
+              snapshot.exists() ? snapshot.data().state : null,
+            );
+            setMigrationStatusError(false);
+          },
+          (error) => {
+            console.error("Error loading menu migration state:", error);
+            setMigrationState(null);
+            setMigrationStatusError(true);
+          },
+        );
+        unsubscribeMigrationOperator = onSnapshot(
+          doc(db, "migrationOperators", currentUser.uid),
+          (snapshot) => {
+            setMigrationOperatorEnabled(
+              snapshot.exists() && snapshot.data().enabled === true,
+            );
+          },
+          (error) => {
+            console.error("Error loading migration operator grant:", error);
+            setMigrationOperatorEnabled(false);
+          },
+        );
 
         try {
           await loadMenuItems();
@@ -83,7 +151,11 @@ function AdminMenu() {
       }
     );
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      unsubscribeMigration?.();
+      unsubscribeMigrationOperator?.();
+    };
   }, [loadMenuItems, navigate]);
 
   const categories = useMemo(() => {
@@ -118,29 +190,69 @@ function AdminMenu() {
         normalizedSearch === "" ||
         searchableText.includes(normalizedSearch);
 
-      return matchesCategory && matchesSearch;
+      const isAvailable = item.available !== false;
+      const matchesAvailability =
+        selectedAvailability === "all" ||
+        (selectedAvailability === "available" && isAvailable) ||
+        (selectedAvailability === "unavailable" && !isAvailable);
+
+      return matchesCategory && matchesSearch && matchesAvailability;
     });
-  }, [menuItems, searchTerm, selectedCategory]);
+  }, [menuItems, searchTerm, selectedCategory, selectedAvailability]);
+
+  const availableCount = menuItems.filter(
+    (item) => item.available !== false,
+  ).length;
+  const unavailableCount = menuItems.length - availableCount;
+  const featuredCount = menuItems.filter(
+    (item) => item.featured === true,
+  ).length;
+
+  const getWriteErrorMessage = (error, action) => {
+    if (error instanceof MenuWriteConflictError) {
+      return `${error.message} The menu will be refreshed.`;
+    }
+    if (error?.code === "permission-denied") {
+      const firestoreDetail = error.message
+        ? ` Firestore detail: ${error.message}`
+        : "";
+      return `Firestore rejected the paired menu and price-book update while trying to ${action}. Confirm that your account has the admin role, the menu migration state allows writes, and the price-book entry is synchronized.${firestoreDetail}`;
+    }
+    return `Unable to ${action}. ${error?.message || "Please try again."}`;
+  };
+
+  const migrationLockMessage = migrationStatusError
+    ? "Menu editing is paused because the migration status could not be verified. Reload the page or contact the project owner."
+    : migrationState === "migrating"
+      ? "Menu editing is paused while the menu migration is in progress."
+      : migrationState === "finalizing"
+        ? "Menu editing is locked while the migration is being finalized."
+        : "Menu editing is paused because the migration status is unavailable or not ready.";
 
   const resetForm = () => {
     setName("");
     setCategory("");
     setDescription("");
     setPrice("");
+    setSizePrices({ "8oz": "", "12oz": "", "16oz": "" });
     setImageUrl("");
     setFeatured(false);
     setPopular(false);
     setAvailable(true);
     setEditingId(null);
     setShowForm(false);
+    setFeedback(null);
   };
 
   const openAddForm = () => {
+    if (menuWritesLocked) return;
+
     setEditingId(null);
     setName("");
     setCategory("");
     setDescription("");
     setPrice("");
+    setSizePrices({ "8oz": "", "12oz": "", "16oz": "" });
     setImageUrl("");
     setFeatured(false);
     setPopular(false);
@@ -155,35 +267,74 @@ function AdminMenu() {
 
   const handleSubmitMenuItem = async (event) => {
     event.preventDefault();
+    if (menuWritesLocked) return;
 
     if (
       !name.trim() ||
       !category.trim() ||
-      !description.trim() ||
-      !price
+      !description.trim()
     ) {
-      alert("Please complete all required fields.");
+      setFeedback({ type: "error", message: "Please complete all required fields." });
       return;
     }
 
-    const numericPrice = Number(price);
+    const hasSizeVariants = isSizeVariantCategory(category);
+    let numericPrice;
+    let numericSizes;
 
-    if (
-      Number.isNaN(numericPrice) ||
-      numericPrice < 0
-    ) {
-      alert("Please enter a valid price.");
-      return;
+    if (hasSizeVariants) {
+      const invalidSizePrice = drinkSizes.some((size) => {
+        const sizePrice = Number(sizePrices[size]);
+        return (
+          sizePrices[size] === ""
+          || !Number.isFinite(sizePrice)
+          || sizePrice < 0
+          || sizePrice > 1000000
+        );
+      });
+
+      if (invalidSizePrice) {
+        setFeedback({
+          type: "error",
+          message: "Enter a valid price for each drink size.",
+        });
+        return;
+      }
+
+      numericSizes = Object.fromEntries(
+        drinkSizes.map((size) => [size, Number(sizePrices[size])]),
+      );
+      numericPrice = numericSizes["8oz"];
+    } else {
+      if (!price) {
+        setFeedback({
+          type: "error",
+          message: "Please complete all required fields.",
+        });
+        return;
+      }
+
+      numericPrice = Number(price);
+      if (
+        !Number.isFinite(numericPrice)
+        || numericPrice < 0
+        || numericPrice > 1000000
+      ) {
+        setFeedback({ type: "error", message: "Please enter a valid price." });
+        return;
+      }
     }
 
     try {
       setSaving(true);
+      setFeedback(null);
 
       const itemData = {
         name: name.trim(),
         category: category.trim(),
         description: description.trim(),
         price: numericPrice,
+        ...(hasSizeVariants ? { sizes: numericSizes } : {}),
         imageUrl: imageUrl.trim(),
         featured,
         popular,
@@ -191,35 +342,37 @@ function AdminMenu() {
       };
 
       if (editingId) {
-        await updateDoc(
-          doc(db, "menuItems", editingId),
-          {
-            ...itemData,
-            updatedAt: serverTimestamp(),
-          }
-        );
-
-        alert("Menu item updated successfully! 🌵");
-      } else {
-        await addDoc(collection(db, "menuItems"), {
-          ...itemData,
-          createdAt: serverTimestamp(),
+        const displayedItem = menuItems.find((item) => item.id === editingId);
+        await menuWriteService.updateMenuItem(editingId, itemData, {
+          expectedMenuRevision: displayedItem?.menuRevision,
         });
-
-        alert("Menu item added successfully! 🌵");
+      } else {
+        await menuWriteService.createMenuItem(itemData);
       }
 
       resetForm();
+      setFeedback({
+        type: "success",
+        message: editingId
+          ? "Menu item updated successfully."
+          : "Menu item added successfully.",
+      });
       await loadMenuItems();
     } catch (error) {
       console.error("Error saving menu item:", error);
-      alert("Unable to save menu item. Please try again.");
+      setFeedback({
+        type: "error",
+        message: getWriteErrorMessage(error, "save the menu item"),
+      });
+      if (error instanceof MenuWriteConflictError) await loadMenuItems();
     } finally {
       setSaving(false);
     }
   };
 
   const handleEditMenuItem = (item) => {
+    if (menuWritesLocked) return;
+
     setEditingId(item.id);
     setName(item.name || "");
     setCategory(item.category || "");
@@ -229,6 +382,16 @@ function AdminMenu() {
         ? String(item.price)
         : ""
     );
+    setSizePrices(Object.fromEntries(
+      drinkSizes.map((size) => [
+        size,
+        item.sizes?.[size] !== undefined
+          ? String(item.sizes[size])
+          : size === "8oz" && item.price !== undefined
+            ? String(item.price)
+            : "",
+      ]),
+    ));
     setImageUrl(item.imageUrl || "");
     setFeatured(Boolean(item.featured));
     setPopular(Boolean(item.popular));
@@ -242,6 +405,8 @@ function AdminMenu() {
   };
 
   const handleDeleteMenuItem = async (id, itemName) => {
+    if (menuWritesLocked) return;
+
     const confirmed = window.confirm(
       `Are you sure you want to delete "${itemName}"?`
     );
@@ -252,18 +417,78 @@ function AdminMenu() {
 
     try {
       setDeletingId(id);
-
-      await deleteDoc(doc(db, "menuItems", id));
-
-      alert("Menu item deleted successfully! 🌵");
+      setFeedback(null);
+      const displayedItem = menuItems.find((item) => item.id === id);
+      await menuWriteService.deleteMenuItem(id, {
+        expectedMenuRevision: displayedItem?.menuRevision,
+      });
+      setFeedback({ type: "success", message: "Menu item deleted successfully." });
       await loadMenuItems();
     } catch (error) {
       console.error("Error deleting menu item:", error);
-      alert(
-        "Unable to delete menu item. Please try again."
-      );
+      setFeedback({
+        type: "error",
+        message: getWriteErrorMessage(error, "delete the menu item"),
+      });
+      if (error instanceof MenuWriteConflictError) await loadMenuItems();
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const handleToggleMenuItem = async (item, field) => {
+    if (
+      menuWritesLocked
+      || updatingItemIds.has(item.id)
+      || deletingId === item.id
+    ) return;
+
+    setUpdatingItemIds((current) => new Set(current).add(item.id));
+    setFeedback(null);
+    try {
+      const nextValue = !(field === "available"
+        ? item.available !== false
+        : item.featured === true);
+      const options = { expectedMenuRevision: item.menuRevision };
+      if (field === "available") {
+        await menuWriteService.setMenuItemAvailability(item.id, nextValue, options);
+      } else {
+        await menuWriteService.setMenuItemFeatured(item.id, nextValue, options);
+      }
+
+      setFeedback({
+        type: "success",
+        message: `${item.name || "Menu item"} is now ${field === "available"
+          ? nextValue ? "available" : "unavailable"
+          : nextValue ? "featured" : "not featured"}.`,
+      });
+      await loadMenuItems();
+    } catch (error) {
+      console.error(`Error updating menu item ${field}:`, error);
+      setFeedback({
+        type: "error",
+        message: getWriteErrorMessage(error, "update the menu item"),
+      });
+      await loadMenuItems();
+    } finally {
+      setUpdatingItemIds((current) => {
+        const next = new Set(current);
+        next.delete(item.id);
+        return next;
+      });
+    }
+  };
+  const handleLogout = async () => {
+    if (loggingOut) return;
+
+    try {
+      setLoggingOut(true);
+      await signOut(auth);
+      navigate("/login");
+    } catch (error) {
+      console.error("Logout error:", error);
+      alert("Unable to log out. Please try again.");
+      setLoggingOut(false);
     }
   };
 
@@ -282,55 +507,209 @@ function AdminMenu() {
 
   return (
     <main className="admin-menu-page">
-      <div className="admin-menu-container">
-        <header className="admin-menu-header">
-          <div>
-            <p className="admin-menu-eyebrow">
-              CAFE CATALOG
-            </p>
+      {mobileNavigationOpen && (
+        <button
+          type="button"
+          className="admin-menu-backdrop"
+          aria-label="Close navigation menu"
+          onClick={() => setMobileNavigationOpen(false)}
+        />
+      )}
 
-            <h1>Menu management</h1>
+      <aside
+        className={`admin-menu-sidebar ${
+          mobileNavigationOpen ? "is-open" : ""
+        }`}
+        aria-label="Admin navigation"
+      >
+        <NavLink
+          to="/admin/menu"
+          className="admin-menu-brand"
+          onClick={() => setMobileNavigationOpen(false)}
+        >
+          <span className="admin-menu-brand-mark" aria-hidden="true">🌵</span>
+          <span>
+            <strong>Cactus Café</strong>
+            <small>ADMIN WORKSPACE</small>
+          </span>
+        </NavLink>
 
-            <p>
-              Keep your customer menu fresh, organized, and
-              ready to order.
-            </p>
+        <div className="admin-menu-sidebar-label">WORKSPACE</div>
+        <nav className="admin-menu-nav">
+          <NavLink
+            to="/admin/menu"
+            end
+            className={({ isActive }) =>
+              `admin-menu-nav-link${isActive ? " active" : ""}`
+            }
+            onClick={() => setMobileNavigationOpen(false)}
+          >
+            <span className="admin-menu-nav-icon" aria-hidden="true">▦</span>
+            <span>Menu Management</span>
+          </NavLink>
+          <NavLink
+            to="/admin/orders"
+            className={({ isActive }) =>
+              `admin-menu-nav-link${isActive ? " active" : ""}`
+            }
+            onClick={() => setMobileNavigationOpen(false)}
+          >
+            <span className="admin-menu-nav-icon" aria-hidden="true">↗</span>
+            <span>Orders</span>
+          </NavLink>
+          <NavLink
+            to="/admin/payments"
+            className={({ isActive }) =>
+              `admin-menu-nav-link${isActive ? " active" : ""}`
+            }
+            onClick={() => setMobileNavigationOpen(false)}
+          >
+            <span className="admin-menu-nav-icon" aria-hidden="true">₱</span>
+            <span>Payment Management</span>
+          </NavLink>
+          <NavLink
+            to="/admin/reservations"
+            className={({ isActive }) =>
+              `admin-menu-nav-link${isActive ? " active" : ""}`
+            }
+            onClick={() => setMobileNavigationOpen(false)}
+          >
+            <span className="admin-menu-nav-icon" aria-hidden="true">◷</span>
+            <span>Reservations</span>
+          </NavLink>
+          <NavLink
+            to="/admin/reviews"
+            className={({ isActive }) =>
+              `admin-menu-nav-link${isActive ? " active" : ""}`
+            }
+            onClick={() => setMobileNavigationOpen(false)}
+          >
+            <span className="admin-menu-nav-icon" aria-hidden="true">☆</span>
+            <span>Reviews</span>
+          </NavLink>
+          <NavLink
+            to="/admin/users"
+            className={({ isActive }) =>
+              `admin-menu-nav-link${isActive ? " active" : ""}`
+            }
+            onClick={() => setMobileNavigationOpen(false)}
+          >
+            <span className="admin-menu-nav-icon" aria-hidden="true">◎</span>
+            <span>Customers &amp; Security</span>
+          </NavLink>
+          <NavLink
+            to="/admin/monthly-records"
+            className={({ isActive }) =>
+              `admin-menu-nav-link${isActive ? " active" : ""}`
+            }
+            onClick={() => setMobileNavigationOpen(false)}
+          >
+            <span className="admin-menu-nav-icon" aria-hidden="true">▤</span>
+            <span>Monthly Records</span>
+          </NavLink>
+        </nav>
+
+        <div className="admin-menu-sidebar-footer">
+          <div className="admin-menu-sidebar-note">
+            <span aria-hidden="true">✦</span>
+            <p>Thoughtful menus make memorable visits.</p>
           </div>
-
           <button
             type="button"
-            className="admin-back-button"
-            onClick={() => navigate("/admin")}
+            className="admin-menu-logout"
+            onClick={handleLogout}
+            disabled={loggingOut}
           >
-            ← Back to dashboard
+            <span className="admin-menu-nav-icon" aria-hidden="true">↪</span>
+            <span>{loggingOut ? "Signing out..." : "Log out"}</span>
           </button>
+        </div>
+      </aside>
+
+      <div className="admin-menu-main">
+        <div className="admin-menu-container">
+        <header className="admin-menu-header">
+          <button
+            type="button"
+            className="admin-menu-mobile-toggle"
+            aria-label="Open navigation menu"
+            aria-expanded={mobileNavigationOpen}
+            onClick={() => setMobileNavigationOpen(true)}
+          >
+            <span />
+            <span />
+            <span />
+          </button>
+          <div className="admin-menu-heading">
+            <p className="admin-menu-eyebrow">CAFE CATALOG</p>
+            <h1>Menu Management</h1>
+            <p>Manage your products, categories, and availability.</p>
+          </div>
+          <div className="admin-menu-profile">
+            <span className="admin-menu-profile-avatar" aria-hidden="true">
+              {(auth.currentUser?.displayName || "A").slice(0, 1).toUpperCase()}
+            </span>
+            <span className="admin-menu-profile-copy">
+              <strong>{auth.currentUser?.displayName || "Cafe Admin"}</strong>
+              <small>Administrator</small>
+            </span>
+          </div>
         </header>
+
+        {menuWritesLocked && (
+          <div
+            className="admin-menu-migration-notice"
+            role={migrationStatusError ? "alert" : "status"}
+          >
+            {migrationLockMessage}
+          </div>
+        )}
 
         <section className="menu-overview">
           <div className="menu-overview-stat">
-            <span>Total products</span>
-            <strong>{menuItems.length}</strong>
+            <span className="menu-stat-icon products-icon" aria-hidden="true">▦</span>
+            <span className="menu-stat-copy">
+              <span>Total Items</span>
+              <strong>{menuItems.length}</strong>
+            </span>
           </div>
 
-          <div className="menu-overview-divider" />
-
           <div className="menu-overview-stat">
-            <span>Categories</span>
-            <strong>{categories.length - 1}</strong>
+            <span className="menu-stat-icon available-icon" aria-hidden="true">✓</span>
+            <span className="menu-stat-copy">
+              <span>Available</span>
+              <strong>{availableCount}</strong>
+            </span>
           </div>
 
-          <div className="menu-overview-divider" />
+          <div className="menu-overview-stat">
+            <span className="menu-stat-icon unavailable-icon" aria-hidden="true">−</span>
+            <span className="menu-stat-copy">
+              <span>Unavailable</span>
+              <strong>{unavailableCount}</strong>
+            </span>
+          </div>
 
           <div className="menu-overview-stat">
-            <span>Featured items</span>
-            <strong>
-              {menuItems.filter((item) => item.featured).length}
-            </strong>
+            <span className="menu-stat-icon featured-icon" aria-hidden="true">✦</span>
+            <span className="menu-stat-copy">
+              <span>Featured</span>
+              <strong>{featuredCount}</strong>
+            </span>
+          </div>
+
+          <div className="menu-overview-stat">
+            <span className="menu-stat-icon categories-icon" aria-hidden="true">◈</span>
+            <span className="menu-stat-copy">
+              <span>Categories</span>
+              <strong>{categories.length - 1}</strong>
+            </span>
           </div>
 
           <button
             type="button"
             className="add-menu-button"
+            disabled={!showForm && menuWritesLocked}
             onClick={() => {
               showForm ? resetForm() : openAddForm();
             }}
@@ -338,6 +717,22 @@ function AdminMenu() {
             {showForm ? "Cancel" : "+ Add product"}
           </button>
         </section>
+
+        {feedback && (
+          <div
+            className={`admin-menu-feedback ${feedback.type}`}
+            role={feedback.type === "error" ? "alert" : "status"}
+          >
+            <span>{feedback.message}</span>
+            <button
+              type="button"
+              onClick={() => setFeedback(null)}
+              aria-label="Dismiss message"
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         {showForm && (
           <section className="add-menu-form-section">
@@ -386,6 +781,7 @@ function AdminMenu() {
                     setName(event.target.value)
                   }
                   placeholder="Example: Cactus Latte"
+                  disabled={menuWritesLocked || saving}
                   required
                 />
               </div>
@@ -397,10 +793,22 @@ function AdminMenu() {
                   id="category"
                   type="text"
                   value={category}
-                  onChange={(event) =>
-                    setCategory(event.target.value)
-                  }
+                  onChange={(event) => {
+                    const nextCategory = event.target.value;
+                    setCategory(nextCategory);
+                    if (
+                      isSizeVariantCategory(nextCategory)
+                      && !sizePrices["8oz"]
+                      && price
+                    ) {
+                      setSizePrices((current) => ({
+                        ...current,
+                        "8oz": price,
+                      }));
+                    }
+                  }}
                   placeholder="Example: Coffee"
+                  disabled={menuWritesLocked || saving}
                   required
                 />
               </div>
@@ -418,30 +826,64 @@ function AdminMenu() {
                   }
                   placeholder="Describe the food or drink..."
                   rows="4"
+                  disabled={menuWritesLocked || saving}
                   required
                 />
               </div>
 
-              <div className="form-group">
-                <label htmlFor="price">Price</label>
+              {isSizeVariantCategory(category) ? (
+                drinkSizes.map((size) => (
+                  <div className="form-group" key={size}>
+                    <label htmlFor={`price-${size}`}>{size} Price</label>
 
-                <div className="price-input">
-                  <span>₱</span>
+                    <div className="price-input">
+                      <span>₱</span>
+                      <input
+                        id={`price-${size}`}
+                        type="number"
+                        min="0"
+                        max="1000000"
+                        step="0.01"
+                        value={sizePrices[size]}
+                        onChange={(event) => {
+                          const nextPrice = event.target.value;
+                          setSizePrices((current) => ({
+                            ...current,
+                            [size]: nextPrice,
+                          }));
+                          if (size === "8oz") setPrice(nextPrice);
+                        }}
+                        placeholder="145"
+                        disabled={menuWritesLocked || saving}
+                        required
+                      />
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="form-group">
+                  <label htmlFor="price">Price</label>
 
-                  <input
-                    id="price"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={price}
-                    onChange={(event) =>
-                      setPrice(event.target.value)
-                    }
-                    placeholder="145"
-                    required
-                  />
+                  <div className="price-input">
+                    <span>₱</span>
+
+                    <input
+                      id="price"
+                      type="number"
+                      min="0"
+                      max="1000000"
+                      step="0.01"
+                      value={price}
+                      onChange={(event) =>
+                        setPrice(event.target.value)
+                      }
+                      placeholder="145"
+                      disabled={menuWritesLocked || saving}
+                      required
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
 
               <div className="form-group">
                 <label htmlFor="imageUrl">
@@ -457,6 +899,7 @@ function AdminMenu() {
                     setImageUrl(event.target.value)
                   }
                   placeholder="https://..."
+                  disabled={menuWritesLocked || saving}
                 />
               </div>
 
@@ -468,6 +911,7 @@ function AdminMenu() {
                     onChange={(event) =>
                       setFeatured(event.target.checked)
                     }
+                    disabled={menuWritesLocked || saving}
                   />
 
                   <span className="checkbox-box">✓</span>
@@ -485,6 +929,7 @@ function AdminMenu() {
                     onChange={(event) =>
                       setPopular(event.target.checked)
                     }
+                    disabled={menuWritesLocked || saving}
                   />
 
                   <span className="checkbox-box">✓</span>
@@ -502,6 +947,7 @@ function AdminMenu() {
                     onChange={(event) =>
                       setAvailable(event.target.checked)
                     }
+                    disabled={menuWritesLocked || saving}
                   />
 
                   <span className="checkbox-box">✓</span>
@@ -526,7 +972,7 @@ function AdminMenu() {
                 <button
                   type="submit"
                   className="save-menu-button"
-                  disabled={saving}
+                  disabled={saving || menuWritesLocked}
                 >
                   {saving
                     ? "Saving..."
@@ -600,6 +1046,17 @@ function AdminMenu() {
                 }
               />
             </label>
+            <label className="availability-filter">
+              <span>Availability</span>
+              <select
+                value={selectedAvailability}
+                onChange={(event) => setSelectedAvailability(event.target.value)}
+              >
+                <option value="all">All items</option>
+                <option value="available">Available</option>
+                <option value="unavailable">Unavailable</option>
+              </select>
+            </label>
           </div>
 
           {menuItems.length === 0 ? (
@@ -620,6 +1077,7 @@ function AdminMenu() {
               <button
                 type="button"
                 className="add-menu-button"
+                disabled={menuWritesLocked}
                 onClick={openAddForm}
               >
                 + Add first product
@@ -684,12 +1142,62 @@ function AdminMenu() {
                         #{item.id.slice(0, 6)}
                       </span>
                     </div>
+                    <span
+                      className={`menu-availability ${
+                        item.available === false ? "unavailable" : "available"
+                      }`}
+                    >
+                      <span aria-hidden="true" />
+                      {item.available === false ? "Unavailable" : "Available"}
+                    </span>
+                  </div>
+
+                  <div className="menu-card-toggles">
+                    <button
+                      type="button"
+                      className={`menu-card-toggle availability-toggle ${
+                        item.available === false ? "is-unavailable" : "is-available"
+                      }`}
+                      aria-pressed={item.available !== false}
+                      disabled={
+                        menuWritesLocked
+                        || updatingItemIds.has(item.id)
+                        || deletingId === item.id
+                      }
+                      onClick={() => handleToggleMenuItem(item, "available")}
+                    >
+                      {updatingItemIds.has(item.id)
+                        ? "Updating..."
+                        : item.available === false ? "Set Available" : "Set Unavailable"}
+                    </button>
+                    <button
+                      type="button"
+                      className={`menu-card-toggle featured-toggle ${
+                        item.featured ? "is-featured" : ""
+                      }`}
+                      aria-pressed={item.featured === true}
+                      disabled={
+                        menuWritesLocked
+                        || updatingItemIds.has(item.id)
+                        || deletingId === item.id
+                      }
+                      onClick={() => handleToggleMenuItem(item, "featured")}
+                    >
+                      {updatingItemIds.has(item.id)
+                        ? "Updating..."
+                        : item.featured ? "Not Featured" : "Set Featured"}
+                    </button>
                   </div>
 
                   <div className="menu-card-actions">
                     <button
                       type="button"
                       className="edit-button"
+                      disabled={
+                        menuWritesLocked
+                        || updatingItemIds.has(item.id)
+                        || deletingId === item.id
+                      }
                       onClick={() =>
                         handleEditMenuItem(item)
                       }
@@ -700,7 +1208,11 @@ function AdminMenu() {
                     <button
                       type="button"
                       className="delete-button"
-                      disabled={deletingId === item.id}
+                      disabled={
+                        menuWritesLocked
+                        || deletingId === item.id
+                        || updatingItemIds.has(item.id)
+                      }
                       onClick={() =>
                         handleDeleteMenuItem(
                           item.id,
@@ -718,6 +1230,7 @@ function AdminMenu() {
             </div>
           )}
         </section>
+        </div>
       </div>
     </main>
   );

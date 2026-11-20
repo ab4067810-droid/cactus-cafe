@@ -1,0 +1,1274 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
+    }
+
+    function validPublicReview(data) {
+      return data.keys().size() == 4
+        && data.keys().hasAll([
+          "rating",
+          "comment",
+          "createdAt",
+          "displayName"
+        ])
+        && data.rating is number
+        && data.rating >= 1
+        && data.rating <= 5
+        && data.comment is string
+        && data.comment.size() > 0
+        && data.comment.size() <= 500
+        && data.createdAt is timestamp
+        && data.displayName == "Cactus Café Customer";
+    }
+
+    function orderPath(orderId) {
+      return /databases/$(database)/documents/orders/$(orderId);
+    }
+
+    function paymentSelectionPath(orderId) {
+      return /databases/$(database)/documents/paymentSelections/$(orderId);
+    }
+
+    function paymentRecordPath(orderId) {
+      return /databases/$(database)/documents/paymentRecords/$(orderId);
+    }
+
+    function paymentSubmissionPath(orderId, attemptId) {
+      return /databases/$(database)/documents/paymentRecords/$(orderId)/submissions/$(attemptId);
+    }
+
+    function validQrPaymentOrder(orderId) {
+      let order = get(orderPath(orderId)).data;
+      let selection = get(paymentSelectionPath(orderId)).data;
+      return signedIn()
+        && order.requestId == orderId
+        && order.customerId == request.auth.uid
+        && order.total is number
+        && selection.requestId == orderId
+        && selection.customerId == request.auth.uid
+        && selection.method == "qr"
+        && selection.timing in ["advance", "pay_later"];
+    }
+
+    function validPaymentReference(referenceNumber) {
+      return referenceNumber is string
+        && referenceNumber.size() > 0
+        && referenceNumber.size() <= 100
+        && referenceNumber.matches(".*\\S.*");
+    }
+
+    function validPaymentReason(reason) {
+      return reason is string
+        && reason.size() > 0
+        && reason.size() <= 500
+        && reason.matches(".*\\S.*");
+    }
+
+    function validPaymentRecordFields(data) {
+      return data.keys().size() == 14
+        && data.keys().hasAll([
+          "orderId",
+          "customerId",
+          "amountDue",
+          "paymentStatus",
+          "attemptCount",
+          "currentSubmissionId",
+          "createdAt",
+          "updatedAt",
+          "lastSubmittedAt",
+          "verifiedAt",
+          "verifiedBy",
+          "resolutionReason",
+          "resolvedAt",
+          "resolvedBy"
+        ]);
+    }
+
+    function validPaymentSubmissionFields(data) {
+      return data.keys().size() == 9
+        && data.keys().hasAll([
+          "orderId",
+          "customerId",
+          "attemptNumber",
+          "referenceNumber",
+          "submittedAt",
+          "status",
+          "reviewedAt",
+          "reviewedBy",
+          "rejectionReason"
+        ]);
+    }
+
+    function validInitialPaymentSubmission(data, orderId, attemptId, attemptNumber) {
+      return validPaymentSubmissionFields(data)
+        && data.orderId == orderId
+        && data.customerId == request.auth.uid
+        && data.attemptNumber == attemptNumber
+        && (
+          (attemptNumber == 1 && attemptId == "attempt-1")
+          || (attemptNumber == 2 && attemptId == "attempt-2")
+          || (attemptNumber == 3 && attemptId == "attempt-3")
+        )
+        && validPaymentReference(data.referenceNumber)
+        && data.submittedAt == request.time
+        && data.status == "pending_review"
+        && data.reviewedAt == null
+        && data.reviewedBy == ""
+        && data.rejectionReason == "";
+    }
+
+    function validPaymentSubmissionAfter(orderId, attemptId, attemptNumber) {
+      let submission = getAfter(paymentSubmissionPath(orderId, attemptId)).data;
+      return existsAfter(paymentSubmissionPath(orderId, attemptId))
+        && submission.orderId == orderId
+        && submission.customerId == request.auth.uid
+        && submission.attemptNumber is int
+        && submission.attemptNumber == attemptNumber
+        && validPaymentReference(submission.referenceNumber)
+        && submission.submittedAt == request.time
+        && submission.status == "pending_review"
+        && submission.reviewedAt == null
+        && submission.reviewedBy == ""
+        && submission.rejectionReason == "";
+    }
+
+    function validFirstPaymentRecord(data, orderId) {
+      let order = get(orderPath(orderId)).data;
+      let selection = get(paymentSelectionPath(orderId)).data;
+      return validPaymentRecordFields(data)
+        && order.requestId == orderId
+        && order.customerId == request.auth.uid
+        && order.total is number
+        && selection.requestId == orderId
+        && selection.customerId == request.auth.uid
+        && selection.method == "qr"
+        && selection.timing in ["advance", "pay_later"]
+        && data.orderId == orderId
+        && data.customerId == request.auth.uid
+        && data.amountDue is int
+        && data.amountDue >= 0
+        && data.amountDue == order.total * 100
+        && data.paymentStatus == "pending_review"
+        && data.attemptCount is int
+        && data.attemptCount == 1
+        && data.currentSubmissionId == "attempt-1"
+        && data.createdAt == request.time
+        && data.updatedAt == request.time
+        && data.lastSubmittedAt == request.time
+        && data.verifiedAt == null
+        && data.verifiedBy == ""
+        && data.resolutionReason == ""
+        && data.resolvedAt == null
+        && data.resolvedBy == ""
+        && !exists(paymentRecordPath(orderId))
+        && existsAfter(paymentSubmissionPath(orderId, "attempt-1"));
+    }
+
+    function validPaymentSubmissionCreate(orderId, attemptId, attemptNumber) {
+      let recordAfter = getAfter(paymentRecordPath(orderId)).data;
+      return validInitialPaymentSubmission(
+          request.resource.data,
+          orderId,
+          attemptId,
+          attemptNumber
+        )
+        && existsAfter(paymentRecordPath(orderId))
+        && recordAfter.orderId == orderId
+        && recordAfter.customerId == request.auth.uid
+        && recordAfter.paymentStatus == "pending_review"
+        && recordAfter.attemptCount == attemptNumber
+        && recordAfter.currentSubmissionId == attemptId
+        && recordAfter.updatedAt == request.time
+        && recordAfter.lastSubmittedAt == request.time
+        && recordAfter.verifiedAt == null
+        && recordAfter.verifiedBy == ""
+        && recordAfter.resolutionReason == ""
+        && recordAfter.resolvedAt == null
+        && recordAfter.resolvedBy == ""
+        && (
+          (
+            attemptNumber == 1
+            && attemptId == "attempt-1"
+            && !exists(paymentRecordPath(orderId))
+            && recordAfter.createdAt == request.time
+          )
+          || (
+            attemptNumber == 2
+            && attemptId == "attempt-2"
+            && get(paymentRecordPath(orderId)).data.customerId == request.auth.uid
+            && get(paymentRecordPath(orderId)).data.paymentStatus == "rejected"
+            && get(paymentRecordPath(orderId)).data.attemptCount == 1
+          )
+          || (
+            attemptNumber == 3
+            && attemptId == "attempt-3"
+            && get(paymentRecordPath(orderId)).data.customerId == request.auth.uid
+            && get(paymentRecordPath(orderId)).data.paymentStatus == "rejected"
+            && get(paymentRecordPath(orderId)).data.attemptCount == 2
+          )
+        );
+    }
+
+    function validCustomerPaymentRecordUpdate(orderId) {
+      let before = resource.data;
+      let after = request.resource.data;
+      return validQrPaymentOrder(orderId)
+        && before.orderId == orderId
+        && before.customerId == request.auth.uid
+        && before.paymentStatus == "rejected"
+        && before.attemptCount is int
+        && before.attemptCount in [1, 2]
+        && validPaymentRecordFields(after)
+        && after.diff(before).affectedKeys()
+          .hasOnly([
+            "paymentStatus",
+            "attemptCount",
+            "currentSubmissionId",
+            "updatedAt",
+            "lastSubmittedAt"
+          ])
+        && after.orderId == before.orderId
+        && after.customerId == before.customerId
+        && after.amountDue == before.amountDue
+        && after.paymentStatus == "pending_review"
+        && after.attemptCount is int
+        && after.attemptCount == before.attemptCount + 1
+        && (
+          (after.attemptCount == 2 && after.currentSubmissionId == "attempt-2"
+            && validPaymentSubmissionAfter(orderId, "attempt-2", 2))
+          || (after.attemptCount == 3 && after.currentSubmissionId == "attempt-3"
+            && validPaymentSubmissionAfter(orderId, "attempt-3", 3))
+        )
+        && after.createdAt == before.createdAt
+        && after.updatedAt == request.time
+        && after.lastSubmittedAt == request.time
+        && after.verifiedAt == before.verifiedAt
+        && after.verifiedBy == before.verifiedBy
+        && after.resolutionReason == before.resolutionReason
+        && after.resolvedAt == before.resolvedAt
+        && after.resolvedBy == before.resolvedBy;
+    }
+
+    function validAdminPaymentRecordUpdate(orderId) {
+      let before = resource.data;
+      let after = request.resource.data;
+      let submissionPath = paymentSubmissionPath(
+        orderId,
+        before.currentSubmissionId
+      );
+      let submission = get(submissionPath).data;
+      let submissionAfter = getAfter(submissionPath).data;
+      return before.orderId == orderId
+        && before.paymentStatus == "pending_review"
+        && before.attemptCount is int
+        && submission.status == "pending_review"
+        && submissionAfter.orderId == orderId
+        && submissionAfter.customerId == before.customerId
+        && submissionAfter.attemptNumber == before.attemptCount
+        && submissionAfter.reviewedAt == request.time
+        && submissionAfter.reviewedBy == request.auth.uid
+        && validPaymentRecordFields(after)
+        && after.diff(before).affectedKeys()
+          .hasOnly([
+            "paymentStatus",
+            "updatedAt",
+            "verifiedAt",
+            "verifiedBy"
+          ])
+        && after.orderId == before.orderId
+        && after.customerId == before.customerId
+        && after.amountDue == before.amountDue
+        && after.attemptCount is int
+        && after.attemptCount == before.attemptCount
+        && after.currentSubmissionId == before.currentSubmissionId
+        && after.createdAt == before.createdAt
+        && after.lastSubmittedAt == before.lastSubmittedAt
+        && after.updatedAt == request.time
+        && after.resolutionReason == before.resolutionReason
+        && after.resolvedAt == before.resolvedAt
+        && after.resolvedBy == before.resolvedBy
+        && (
+          (
+            after.paymentStatus == "paid"
+            && after.verifiedAt == request.time
+            && after.verifiedBy == request.auth.uid
+            && submissionAfter.status == "verified"
+            && submissionAfter.rejectionReason == ""
+          )
+          || (
+            after.paymentStatus in ["rejected", "admin_review_required"]
+            && after.verifiedAt == before.verifiedAt
+            && after.verifiedBy == before.verifiedBy
+            && submissionAfter.status == "rejected"
+            && validPaymentReason(submissionAfter.rejectionReason)
+            && (
+              (
+                before.attemptCount < 3
+                && after.paymentStatus == "rejected"
+              )
+              || (
+                before.attemptCount == 3
+                && after.paymentStatus == "admin_review_required"
+              )
+            )
+          )
+        );
+    }
+
+    function validAdminPaymentResolution(orderId) {
+      let before = resource.data;
+      let after = request.resource.data;
+      let finalSubmission = get(
+        paymentSubmissionPath(orderId, "attempt-3")
+      ).data;
+      return before.orderId == orderId
+        && before.paymentStatus == "admin_review_required"
+        && before.attemptCount == 3
+        && before.currentSubmissionId == "attempt-3"
+        && before.verifiedAt == null
+        && before.verifiedBy == ""
+        && before.resolutionReason == ""
+        && before.resolvedAt == null
+        && before.resolvedBy == ""
+        && finalSubmission.orderId == orderId
+        && finalSubmission.customerId == before.customerId
+        && finalSubmission.attemptNumber == 3
+        && finalSubmission.status == "rejected"
+        && finalSubmission.reviewedAt is timestamp
+        && finalSubmission.reviewedBy is string
+        && validPaymentReason(finalSubmission.rejectionReason)
+        && validPaymentRecordFields(after)
+        && after.diff(before).affectedKeys().hasOnly([
+          "paymentStatus",
+          "updatedAt",
+          "verifiedAt",
+          "verifiedBy",
+          "resolutionReason",
+          "resolvedAt",
+          "resolvedBy"
+        ])
+        && after.orderId == before.orderId
+        && after.customerId == before.customerId
+        && after.amountDue == before.amountDue
+        && after.attemptCount == 3
+        && after.currentSubmissionId == "attempt-3"
+        && after.createdAt == before.createdAt
+        && after.lastSubmittedAt == before.lastSubmittedAt
+        && after.updatedAt == request.time
+        && after.resolvedAt == request.time
+        && after.resolvedBy == request.auth.uid
+        && (
+          (
+            after.paymentStatus == "paid"
+            && after.verifiedAt == request.time
+            && after.verifiedBy == request.auth.uid
+            && after.resolutionReason == ""
+          )
+          || (
+            after.paymentStatus == "rejected"
+            && after.verifiedAt == before.verifiedAt
+            && after.verifiedBy == before.verifiedBy
+            && validPaymentReason(after.resolutionReason)
+          )
+        );
+    }
+
+    function validAdminPaymentSubmissionUpdate(orderId, attemptId) {
+      let before = resource.data;
+      let after = request.resource.data;
+      let parentAfter = getAfter(paymentRecordPath(orderId)).data;
+      return before.status == "pending_review"
+        && validPaymentSubmissionFields(after)
+        && after.diff(before).affectedKeys().hasOnly([
+          "status",
+          "reviewedAt",
+          "reviewedBy",
+          "rejectionReason"
+        ])
+        && after.orderId == before.orderId
+        && after.customerId == before.customerId
+        && before.attemptNumber is int
+        && after.attemptNumber == before.attemptNumber
+        && after.referenceNumber == before.referenceNumber
+        && after.submittedAt == before.submittedAt
+        && (
+          (attemptId == "attempt-1" && before.attemptNumber == 1)
+          || (attemptId == "attempt-2" && before.attemptNumber == 2)
+          || (attemptId == "attempt-3" && before.attemptNumber == 3)
+        )
+        && after.reviewedAt == request.time
+        && after.reviewedBy == request.auth.uid
+        && parentAfter.orderId == orderId
+        && parentAfter.customerId == before.customerId
+        && parentAfter.currentSubmissionId == attemptId
+        && parentAfter.attemptCount == before.attemptNumber
+        && parentAfter.updatedAt == request.time
+        && (
+          (
+            after.status == "verified"
+            && after.rejectionReason == ""
+            && parentAfter.paymentStatus == "paid"
+            && parentAfter.verifiedAt == request.time
+            && parentAfter.verifiedBy == request.auth.uid
+          )
+          || (
+            after.status == "rejected"
+            && validPaymentReason(after.rejectionReason)
+            && (
+              (
+                before.attemptNumber < 3
+                && parentAfter.paymentStatus == "rejected"
+              )
+              || (
+                before.attemptNumber == 3
+                && parentAfter.paymentStatus == "admin_review_required"
+              )
+            )
+            && parentAfter.verifiedAt == before.reviewedAt
+            && parentAfter.verifiedBy == before.reviewedBy
+          )
+        );
+    }
+
+    function menuPath(menuItemId) {
+      return /databases/$(database)/documents/menuItems/$(menuItemId);
+    }
+
+    function priceBookPath() {
+      return /databases/$(database)/documents/menuControl/current;
+    }
+
+    function migrationPath() {
+      return /databases/$(database)/documents/menuControl/migration;
+    }
+
+    function migrationOperatorPath(userId) {
+      return /databases/$(database)/documents/migrationOperators/$(userId);
+    }
+
+    function isMigrating() {
+      return exists(migrationPath())
+        && get(migrationPath()).data.state == "migrating";
+    }
+
+    function isMigrationOperator() {
+      return isAdmin()
+        && exists(migrationOperatorPath(request.auth.uid))
+        && get(migrationOperatorPath(request.auth.uid)).data.enabled == true;
+    }
+
+    function menuWritesAllowed() {
+      return exists(migrationPath())
+        && existsAfter(migrationPath())
+        && get(migrationPath()).data.state == getAfter(migrationPath()).data.state
+        && get(migrationPath()).data.state in ["migrating", "ready"]
+        && (
+          get(migrationPath()).data.state == "ready"
+          || isMigrationOperator()
+        );
+    }
+
+    function validMigrationState(data) {
+      return data.keys().size() == 4
+        && data.keys().hasAll(["state", "startedAt", "updatedAt", "updatedBy"])
+        && data.keys().hasOnly(["state", "startedAt", "updatedAt", "updatedBy"])
+        && data.state in ["migrating", "finalizing", "ready"]
+        && data.startedAt is timestamp
+        && data.updatedAt == request.time
+        && data.updatedBy == request.auth.uid;
+    }
+
+    function validText(value, maxLength) {
+      return value is string
+        && value.size() > 0
+        && value.size() <= maxLength;
+    }
+
+    function validRequestItem(item) {
+      return item is map
+        && item.keys().hasOnly(["id", "quantity"])
+        && item.id is string
+        && item.id.size() > 0
+        && item.id.size() <= 1500
+        && !item.id.matches(".*[/].*")
+        && item.quantity is int
+        && item.quantity >= 1
+        && item.quantity <= 99;
+    }
+
+    function validRequestItems(items) {
+      return items is list
+        && items.size() >= 1
+        && items.size() <= 10
+        && validRequestItem(items[0])
+        && (items.size() <= 1 || validRequestItem(items[1]))
+        && (items.size() <= 2 || validRequestItem(items[2]))
+        && (items.size() <= 3 || validRequestItem(items[3]))
+        && (items.size() <= 4 || validRequestItem(items[4]))
+        && (items.size() <= 5 || validRequestItem(items[5]))
+        && (items.size() <= 6 || validRequestItem(items[6]))
+        && (items.size() <= 7 || validRequestItem(items[7]))
+        && (items.size() <= 8 || validRequestItem(items[8]))
+        && (items.size() <= 9 || validRequestItem(items[9]));
+    }
+
+    function requestItemsHaveDistinctIds(items) {
+      let count = items.size();
+      let ids = count == 0
+        ? []
+        : [items[0].id]
+          .concat(count > 1 ? [items[1].id] : [])
+          .concat(count > 2 ? [items[2].id] : [])
+          .concat(count > 3 ? [items[3].id] : [])
+          .concat(count > 4 ? [items[4].id] : [])
+          .concat(count > 5 ? [items[5].id] : [])
+          .concat(count > 6 ? [items[6].id] : [])
+          .concat(count > 7 ? [items[7].id] : [])
+          .concat(count > 8 ? [items[8].id] : [])
+          .concat(count > 9 ? [items[9].id] : []);
+      return count >= 1
+        && count <= 10
+        && ids.toSet().size() == count;
+    }
+
+    function validRequest(data) {
+      return data.customerId == request.auth.uid
+        && data.keys().hasOnly([
+          "customerId",
+          "customerEmail",
+          "customerName",
+          "phone",
+          "items",
+          "orderType",
+          "address",
+          "notes",
+          "status",
+          "createdAt"
+        ])
+        && data.customerEmail is string
+        && data.customerEmail.size() <= 254
+        && (data.customerEmail == "" || data.customerEmail == request.auth.token.email)
+        && validText(data.customerName, 120)
+        && validText(data.phone, 40)
+        && validRequestItems(data.items)
+        && requestItemsHaveDistinctIds(data.items)
+        && data.orderType in ["takeout", "delivery", "dine-in"]
+        && data.address is string
+        && data.address.size() <= 500
+        && (data.orderType != "delivery" || data.address.size() > 0)
+        && (data.orderType == "delivery" || data.address == "")
+        && data.notes is string
+        && data.notes.size() <= 1000
+        && data.status == "pending"
+        && data.createdAt == request.time;
+    }
+
+    function validMenuItem(data) {
+      return data.price is number
+        && data.price >= 0
+        && data.price <= 1000000
+        && data.available is bool
+        && data.menuRevision is int
+        && data.menuRevision >= 1;
+    }
+
+    function validPriceEntry(entry) {
+      return entry is map
+        && entry.keys().size() == 3
+        && entry.keys().hasAll(["priceCents", "available", "menuRevision"])
+        && entry.keys().hasOnly(["priceCents", "available", "menuRevision"])
+        && entry.priceCents is int
+        && entry.priceCents >= 0
+        && entry.priceCents <= 100000000
+        && entry.available is bool
+        && entry.menuRevision is int
+        && entry.menuRevision >= 1;
+    }
+
+    function priceEntryMatchesMenu(entry, menuData) {
+      return validPriceEntry(entry)
+        && validMenuItem(menuData)
+        && entry.priceCents == math.round(menuData.price * 100)
+        && entry.available == menuData.available
+        && entry.menuRevision == menuData.menuRevision;
+    }
+
+    function bookMetadataValid(data) {
+      return data.keys().size() == 4
+        && data.keys().hasAll([
+          "revision",
+          "updatedAt",
+          "lastChangedMenuItemId",
+          "prices"
+        ])
+        && data.keys().hasOnly([
+          "revision",
+          "updatedAt",
+          "lastChangedMenuItemId",
+          "prices"
+        ])
+        && data.revision is int
+        && data.revision >= 1
+        && data.updatedAt == request.time
+        && data.lastChangedMenuItemId is string
+        && data.lastChangedMenuItemId.size() > 0
+        && data.prices is map;
+    }
+
+    function readablePriceBook(data) {
+      return data is map
+        && data.keys().size() == 4
+        && data.keys().hasAll([
+          "revision",
+          "updatedAt",
+          "lastChangedMenuItemId",
+          "prices"
+        ])
+        && data.keys().hasOnly([
+          "revision",
+          "updatedAt",
+          "lastChangedMenuItemId",
+          "prices"
+        ])
+        && data.revision is int
+        && data.revision >= 1
+        && data.updatedAt is timestamp
+        && data.lastChangedMenuItemId is string
+        && data.lastChangedMenuItemId.size() > 0
+        && data.prices is map;
+    }
+
+    function exactlyOnePriceEntryChanged(beforePrices, afterPrices, itemId) {
+      let changed = afterPrices.diff(beforePrices).affectedKeys();
+      return changed.hasOnly([itemId]) && changed.hasAll([itemId]);
+    }
+
+    function priceBookUpdateMatches(itemId) {
+      let before = get(priceBookPath()).data;
+      let after = getAfter(priceBookPath()).data;
+      return bookMetadataValid(after)
+        && after.revision == before.revision + 1
+        && after.lastChangedMenuItemId == itemId
+        && exactlyOnePriceEntryChanged(
+          before.prices,
+          after.prices,
+          itemId
+        );
+    }
+
+    function initialPriceBookMatches(itemId, menuData) {
+      let after = getAfter(priceBookPath()).data;
+      return bookMetadataValid(after)
+        && after.revision == 1
+        && after.lastChangedMenuItemId == itemId
+        && after.prices.keys().size() == 1
+        && after.prices.keys().hasAll([itemId])
+        && priceEntryMatchesMenu(after.prices[itemId], menuData);
+    }
+
+    function validPriceBookCreate() {
+      let itemId = request.resource.data.lastChangedMenuItemId;
+      let menuBefore = get(menuPath(itemId));
+      let menuAfter = getAfter(menuPath(itemId));
+      return isAdmin()
+        && menuWritesAllowed()
+        && bookMetadataValid(request.resource.data)
+        && request.resource.data.revision == 1
+        && request.resource.data.prices.keys().size() == 1
+        && request.resource.data.prices.keys().hasAll([itemId])
+        && existsAfter(menuPath(itemId))
+        && (
+          !exists(menuPath(itemId))
+          || (
+            isMigrating()
+            && !menuBefore.data.keys().hasAny(["menuRevision"])
+            && menuAfter.data.diff(menuBefore.data).affectedKeys()
+              .hasAll(["menuRevision"])
+          )
+        )
+        && menuAfter.data.menuRevision == 1
+        && priceEntryMatchesMenu(
+          request.resource.data.prices[itemId],
+          menuAfter.data
+        );
+    }
+
+    function validPriceBookUpdate() {
+      let itemId = request.resource.data.lastChangedMenuItemId;
+      let menuBefore = get(menuPath(itemId));
+      let menuAfter = getAfter(menuPath(itemId));
+      let newPrices = request.resource.data.prices;
+      let oldPrices = resource.data.prices;
+      return isAdmin()
+        && menuWritesAllowed()
+        && bookMetadataValid(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly([
+            "revision",
+            "updatedAt",
+            "lastChangedMenuItemId",
+            "prices"
+          ])
+        && request.resource.data.revision == resource.data.revision + 1
+        && exactlyOnePriceEntryChanged(oldPrices, newPrices, itemId)
+        && (
+          (
+            existsAfter(menuPath(itemId))
+            && (
+              (
+                exists(menuPath(itemId))
+                && (
+                  menuBefore.data.keys().hasAny(["menuRevision"])
+                    ? menuAfter.data.menuRevision == menuBefore.data.menuRevision + 1
+                    : isMigrating()
+                      && menuAfter.data.menuRevision == 1
+                )
+              )
+              || (
+                !exists(menuPath(itemId))
+                && menuAfter.data.menuRevision == 1
+              )
+            )
+            && newPrices.keys().hasAll([itemId])
+            && priceEntryMatchesMenu(
+              newPrices[itemId],
+              menuAfter.data
+            )
+          )
+          || (
+            exists(menuPath(itemId))
+            && !existsAfter(menuPath(itemId))
+            && !newPrices.keys().hasAny([itemId])
+          )
+        );
+    }
+
+    function menuCreatePaired(menuItemId, menuData) {
+      return (
+          exists(priceBookPath())
+          && menuWritesAllowed()
+          && priceBookUpdateMatches(menuItemId)
+          && getAfter(priceBookPath()).data.prices.keys().hasAll([menuItemId])
+          && priceEntryMatchesMenu(
+            getAfter(priceBookPath()).data.prices[menuItemId],
+            menuData
+          )
+        )
+        || (
+          !exists(priceBookPath())
+          && menuWritesAllowed()
+          && initialPriceBookMatches(menuItemId, menuData)
+        );
+    }
+
+    function menuUpdatePaired(menuItemId, menuData) {
+      return menuWritesAllowed()
+        && (
+          (
+            exists(priceBookPath())
+            && priceBookUpdateMatches(menuItemId)
+            && getAfter(priceBookPath()).data.prices.keys().hasAll([menuItemId])
+            && priceEntryMatchesMenu(
+              getAfter(priceBookPath()).data.prices[menuItemId],
+              menuData
+            )
+          )
+          || (
+            !exists(priceBookPath())
+            && isMigrating()
+            && initialPriceBookMatches(menuItemId, menuData)
+          )
+        );
+    }
+
+    function menuDeletePaired(menuItemId) {
+      let bookAfter = getAfter(priceBookPath()).data;
+      return menuWritesAllowed()
+        && priceBookUpdateMatches(menuItemId)
+        && !bookAfter.prices.keys().hasAny([menuItemId]);
+    }
+
+    function validSnapshotItem(orderItem, requestedItem, prices) {
+      let entry = prices[requestedItem.id];
+      let priceCents = entry is map ? entry.get('priceCents', null) : null;
+      return orderItem is map
+        && orderItem.keys().hasOnly([
+          "id",
+          "name",
+          "price",
+          "quantity",
+          "subtotal"
+        ])
+        && entry is map
+        && entry.keys().hasOnly([
+          "priceCents",
+          "available",
+          "menuRevision"
+        ])
+        && priceCents is int
+        && priceCents >= 0
+        && priceCents <= 100000000
+        && entry.menuRevision is int
+        && entry.menuRevision >= 1
+        && entry.available == true
+        && orderItem.id == requestedItem.id
+        && orderItem.name is string
+        && orderItem.name.size() > 0
+        && orderItem.name.size() <= 200
+        && orderItem.quantity == requestedItem.quantity
+        && orderItem.price == priceCents / 100
+        && orderItem.subtotal
+          == priceCents * requestedItem.quantity / 100;
+    }
+
+    function validSnapshotItems(orderItems, requestedItems, prices) {
+      let count = requestedItems.size();
+      return orderItems is list
+        && orderItems.size() == count
+        && count >= 1
+        && count <= 10
+        && validSnapshotItem(orderItems[0], requestedItems[0], prices)
+        && (count <= 1
+          || validSnapshotItem(orderItems[1], requestedItems[1], prices))
+        && (count <= 2
+          || validSnapshotItem(orderItems[2], requestedItems[2], prices))
+        && (count <= 3
+          || validSnapshotItem(orderItems[3], requestedItems[3], prices))
+        && (count <= 4
+          || validSnapshotItem(orderItems[4], requestedItems[4], prices))
+        && (count <= 5
+          || validSnapshotItem(orderItems[5], requestedItems[5], prices))
+        && (count <= 6
+          || validSnapshotItem(orderItems[6], requestedItems[6], prices))
+        && (count <= 7
+          || validSnapshotItem(orderItems[7], requestedItems[7], prices))
+        && (count <= 8
+          || validSnapshotItem(orderItems[8], requestedItems[8], prices))
+        && (count <= 9
+          || validSnapshotItem(orderItems[9], requestedItems[9], prices));
+    }
+
+    function orderItemsTotalCents(orderItems, prices) {
+      let count = orderItems.size();
+      return math.round(orderItems[0].subtotal * 100)
+        + (count <= 1
+          ? 0
+          : math.round(orderItems[1].subtotal * 100))
+        + (count <= 2
+          ? 0
+          : math.round(orderItems[2].subtotal * 100))
+        + (count <= 3
+          ? 0
+          : math.round(orderItems[3].subtotal * 100))
+        + (count <= 4
+          ? 0
+          : math.round(orderItems[4].subtotal * 100))
+        + (count <= 5
+          ? 0
+          : math.round(orderItems[5].subtotal * 100))
+        + (count <= 6
+          ? 0
+          : math.round(orderItems[6].subtotal * 100))
+        + (count <= 7
+          ? 0
+          : math.round(orderItems[7].subtotal * 100))
+        + (count <= 8
+          ? 0
+          : math.round(orderItems[8].subtotal * 100))
+        + (count <= 9
+          ? 0
+          : math.round(orderItems[9].subtotal * 100));
+    }
+
+    function requestApprovalMatchesOrder(orderRequest, order, requestId) {
+      return orderRequest.status == "approved"
+        && orderRequest.orderId == requestId
+        && orderRequest.reviewedBy == request.auth.uid
+        && orderRequest.reviewedAt == request.time
+        && order.requestId == requestId
+        && order.customerId == orderRequest.customerId
+        && order.status == "Pending"
+        && order.createdAt == request.time;
+    }
+
+    function validRichOrder(order, requestBefore, orderId, prices) {
+      return order is map
+        && order.keys().hasOnly([
+          "requestId",
+          "customerId",
+          "customerEmail",
+          "customerName",
+          "phone",
+          "orderType",
+          "address",
+          "notes",
+          "items",
+          "total",
+          "status",
+          "createdAt"
+        ])
+        && order.requestId == orderId
+        && order.customerId == requestBefore.customerId
+        && order.customerEmail == requestBefore.customerEmail
+        && order.customerName == requestBefore.customerName
+        && order.phone == requestBefore.phone
+        && order.orderType == requestBefore.orderType
+        && order.address == requestBefore.address
+        && order.notes == requestBefore.notes
+        && order.status == "Pending"
+        && order.createdAt == request.time
+        && order.total is number
+        && order.total >= 0
+        && order.total <= 990000000
+        && validSnapshotItems(
+          order.items,
+          requestBefore.items,
+          prices
+        )
+        && order.total == orderItemsTotalCents(order.items, prices) / 100;
+    }
+
+    function validOrderCreation(order, orderId) {
+      let requestBefore = get(/databases/$(database)/documents/orderRequests/$(orderId)).data;
+      let requestAfter = getAfter(/databases/$(database)/documents/orderRequests/$(orderId)).data;
+      let migration = get(migrationPath()).data;
+      let priceBook = get(priceBookPath()).data;
+      return requestBefore.status == "pending"
+        && exists(migrationPath())
+        && migration.state == "ready"
+        && exists(priceBookPath())
+        && readablePriceBook(priceBook)
+        && requestAfter.status == "approved"
+        && requestAfter.orderId == orderId
+        && requestAfter.reviewedBy == request.auth.uid
+        && requestAfter.reviewedAt == request.time
+        && !exists(orderPath(orderId))
+        && validRichOrder(order, requestBefore, orderId, priceBook.prices);
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if isOwner(userId)
+        && request.resource.data.role == "customer";
+      allow update: if isAdmin()
+        || (isOwner(userId)
+          && resource.data.role == "customer"
+          && request.resource.data.role == resource.data.role);
+      allow delete: if isAdmin();
+    }
+
+    match /menuItems/{menuItemId} {
+      allow read: if true;
+      allow create: if isAdmin()
+        && validMenuItem(request.resource.data)
+        && request.resource.data.menuRevision == 1
+        && menuCreatePaired(menuItemId, request.resource.data);
+      allow update: if isAdmin()
+        && validMenuItem(request.resource.data)
+        && (
+          resource.data.keys().hasAny(["menuRevision"])
+            ? request.resource.data.menuRevision == resource.data.menuRevision + 1
+            : isMigrating()
+              && request.resource.data.menuRevision == 1
+        )
+        && menuUpdatePaired(menuItemId, request.resource.data);
+      allow delete: if isAdmin() && menuDeletePaired(menuItemId);
+    }
+
+    match /menuControl/current {
+      allow read: if true;
+      allow create: if validPriceBookCreate();
+      allow update: if validPriceBookUpdate();
+      allow delete: if false;
+    }
+
+    match /menuControl/migration {
+      allow get: if isAdmin();
+      allow list: if false;
+      allow create: if isMigrationOperator()
+        && validMigrationState(request.resource.data)
+        && request.resource.data.state == "migrating"
+        && request.resource.data.startedAt == request.time;
+      allow update: if isMigrationOperator()
+        && resource.data.state in ["migrating", "finalizing"]
+        && validMigrationState(request.resource.data)
+        && request.resource.data.startedAt == resource.data.startedAt
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["state", "updatedAt", "updatedBy"])
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasAll(["state"])
+        && (
+          (
+            resource.data.state == "migrating"
+            && request.resource.data.state == "finalizing"
+          )
+          || (
+            resource.data.state == "finalizing"
+            && request.resource.data.state == "ready"
+          )
+        );
+      allow delete: if false;
+    }
+
+    match /migrationOperators/{operatorId} {
+      allow get: if isOwner(operatorId);
+      allow list: if false;
+      allow create, update, delete: if false;
+    }
+
+    match /orderRequests/{requestId} {
+      allow get, list: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow create: if signedIn() && validRequest(request.resource.data);
+      allow update: if isAdmin()
+        && resource.data.status == "pending"
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly([
+            "status",
+            "orderId",
+            "reviewedAt",
+            "reviewedBy",
+            "rejectionReason"
+          ])
+        && (
+          (
+            request.resource.data.status == "approved"
+            && request.resource.data.keys().size() == 13
+            && request.resource.data.orderId == requestId
+            && request.resource.data.reviewedAt == request.time
+            && request.resource.data.reviewedBy == request.auth.uid
+            && !exists(orderPath(requestId))
+            && existsAfter(orderPath(requestId))
+            && requestApprovalMatchesOrder(
+              request.resource.data,
+              getAfter(orderPath(requestId)).data,
+              requestId
+            )
+          )
+          || (
+            request.resource.data.status == "rejected"
+            && request.resource.data.keys().size() == 13
+            && request.resource.data.reviewedAt == request.time
+            && request.resource.data.reviewedBy == request.auth.uid
+            && validText(request.resource.data.rejectionReason, 500)
+          )
+        );
+      allow delete: if false;
+    }
+
+    match /orders/{orderId} {
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow create: if isAdmin()
+        && validOrderCreation(request.resource.data, orderId);
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status"])
+        && request.resource.data.status in [
+          "Pending",
+          "Confirmed",
+          "Preparing",
+          "Ready",
+          "Ready for Pickup",
+          "Out for Delivery",
+          "Completed",
+          "Cancelled"
+        ];
+      allow delete: if false;
+    }
+
+    match /reservations/{reservationId} {
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.userId == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == "Pending";
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status"])
+        && request.resource.data.status in [
+          "Pending",
+          "Confirmed",
+          "Completed",
+          "Cancelled"
+        ];
+      allow delete: if false;
+    }
+
+    match /notifications/{notificationId} {
+      allow get, list: if signedIn()
+        && resource.data.userId == request.auth.uid;
+      allow create: if isAdmin()
+        && request.resource.data.keys().hasAll([
+          "userId",
+          "type",
+          "itemId",
+          "title",
+          "message",
+          "isRead",
+          "createdAt"
+        ])
+        && request.resource.data.keys().hasOnly([
+          "userId",
+          "type",
+          "itemId",
+          "title",
+          "message",
+          "isRead",
+          "createdAt"
+        ])
+        && request.resource.data.userId is string
+        && request.resource.data.userId.size() > 0
+        && request.resource.data.type in ["order", "reservation"]
+        && request.resource.data.itemId is string
+        && request.resource.data.itemId.size() > 0
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 120
+        && request.resource.data.message is string
+        && request.resource.data.message.size() > 0
+        && request.resource.data.message.size() <= 500
+        && request.resource.data.isRead == false
+        && request.resource.data.createdAt == request.time;
+      allow update: if signedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["isRead"])
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasAll(["isRead"])
+        && request.resource.data.isRead is bool;
+      allow delete: if false;
+    }
+
+    match /paymentSelections/{requestId} {
+      allow get, list: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow create: if signedIn()
+        && !isAdmin()
+        && request.resource.data.keys().size() == 6
+        && request.resource.data.keys().hasAll([
+          "requestId",
+          "customerId",
+          "method",
+          "timing",
+          "createdAt",
+          "updatedAt"
+        ])
+        && request.resource.data.requestId == requestId
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.method in ["cash", "qr"]
+        && request.resource.data.timing in ["advance", "pay_later"]
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && !exists(/databases/$(database)/documents/orderRequests/$(requestId))
+        && existsAfter(/databases/$(database)/documents/orderRequests/$(requestId))
+        && getAfter(
+          /databases/$(database)/documents/orderRequests/$(requestId)
+        ).data.customerId == request.auth.uid
+        && getAfter(
+          /databases/$(database)/documents/orderRequests/$(requestId)
+        ).data.status == "pending";
+      allow update: if signedIn()
+        && !isAdmin()
+        && resource.data.customerId == request.auth.uid
+        && request.resource.data.keys().size() == 6
+        && request.resource.data.keys().hasAll([
+          "requestId",
+          "customerId",
+          "method",
+          "timing",
+          "createdAt",
+          "updatedAt"
+        ])
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["method", "timing"])
+        && request.resource.data.requestId == requestId
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.method in ["cash", "qr"]
+        && request.resource.data.timing in ["advance", "pay_later"]
+        && existsAfter(/databases/$(database)/documents/orderRequests/$(requestId))
+        && getAfter(
+          /databases/$(database)/documents/orderRequests/$(requestId)
+        ).data.customerId == request.auth.uid
+        && getAfter(
+          /databases/$(database)/documents/orderRequests/$(requestId)
+        ).data.status == "pending";
+      allow delete: if false;
+    }
+
+    match /paymentRecords/{orderId} {
+      allow get, list: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow create: if signedIn()
+        && !isAdmin()
+        && validFirstPaymentRecord(request.resource.data, orderId);
+      allow update: if (
+          signedIn()
+          && !isAdmin()
+          && validCustomerPaymentRecordUpdate(orderId)
+        )
+        || (
+          isAdmin()
+          && validAdminPaymentRecordUpdate(orderId)
+        )
+        || (
+          isAdmin()
+          && validAdminPaymentResolution(orderId)
+        );
+      allow delete: if false;
+
+      match /submissions/{attemptId} {
+        allow get, list: if isAdmin()
+          || (signedIn() && resource.data.customerId == request.auth.uid);
+        allow create: if signedIn()
+          && !isAdmin()
+          && !exists(paymentSubmissionPath(orderId, attemptId))
+          && validPaymentSubmissionCreate(
+            orderId,
+            attemptId,
+            request.resource.data.attemptNumber
+          );
+        allow update: if isAdmin()
+          && validAdminPaymentSubmissionUpdate(orderId, attemptId);
+        allow delete: if false;
+      }
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.status == "Pending"
+        && request.resource.data.rating is number
+        && request.resource.data.rating >= 1
+        && request.resource.data.rating <= 5
+        && request.resource.data.comment is string
+        && request.resource.data.comment.size() > 0
+        && request.resource.data.comment.size() <= 500;
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status"])
+        && request.resource.data.status in ["Pending", "Approved", "Rejected"];
+      allow delete: if isAdmin();
+    }
+
+    match /publicReviews/{reviewId} {
+      allow read: if true;
+      allow create, update: if isAdmin()
+        && validPublicReview(request.resource.data);
+      allow delete: if isAdmin();
+    }
+  }
+}

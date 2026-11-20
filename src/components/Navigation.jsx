@@ -1,9 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  collection,
+  onSnapshot,
+  query,
+  where,
+} from "firebase/firestore";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
-import { useAuth } from "../context/AuthContext";
+import { useAuth } from "../context/Authcontext";
 import { useCart } from "../context/CartContext";
 import { logout } from "../services/authService";
+import { auth, db } from "../services/firebase";
 import CartPanel from "./CartPanel";
 import "../styles/Navigation.css";
 
@@ -19,12 +26,60 @@ const customerLinks = [
 ];
 
 const adminLinks = [
-  { label: "Admin Dashboard", to: "/admin" },
   { label: "Menu Management", to: "/admin/menu" },
   { label: "Orders", to: "/admin/orders" },
+  { label: "Payment Management", to: "/admin/payments" },
   { label: "Reservations", to: "/admin/reservations" },
   { label: "Reviews", to: "/admin/reviews" },
+  { label: "Monthly Records", to: "/admin/monthly-records" },
 ];
+
+const getAccountInitials = (name) => {
+  const nameParts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (nameParts.length === 0) return "";
+
+  const firstInitial = Array.from(nameParts[0])[0];
+  const lastInitial =
+    nameParts.length > 1
+      ? Array.from(nameParts[nameParts.length - 1])[0]
+      : "";
+
+  return `${firstInitial}${lastInitial}`.toUpperCase();
+};
+
+function AccountAvatar({ user }) {
+  const [failedImageUrl, setFailedImageUrl] = useState("");
+  const imageUrl =
+    typeof user?.photoURL === "string" ? user.photoURL.trim() : "";
+  const initials = getAccountInitials(user?.displayName);
+
+  return (
+    <span className="navbar-account-avatar" aria-hidden="true">
+      {imageUrl && failedImageUrl !== imageUrl ? (
+        <img
+          src={imageUrl}
+          alt=""
+          referrerPolicy="no-referrer"
+          onError={() => setFailedImageUrl(imageUrl)}
+        />
+      ) : initials ? (
+        <span>{initials}</span>
+      ) : (
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <circle cx="12" cy="8" r="3.5" />
+          <path d="M5.5 20a6.5 6.5 0 0 1 13 0" />
+        </svg>
+      )}
+    </span>
+  );
+}
 
 function Navigation() {
   const [openMenuPath, setOpenMenuPath] = useState(null);
@@ -32,12 +87,19 @@ function Navigation() {
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState("");
+  const [unreadNotifications, setUnreadNotifications] = useState({
+    userId: null,
+    order: false,
+    reservation: false,
+  });
   const accountMenuRef = useRef(null);
   const accountTriggerRef = useRef(null);
   const cartButtonRef = useRef(null);
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const { user, role, loading, roleError } = useAuth();
+  const userId = user?.uid;
+  const homePath = user ? "/customer" : "/";
   const { cart, totalItems, cartChangeKey } = useCart();
   const [previousPath, setPreviousPath] = useState(pathname);
 
@@ -49,6 +111,50 @@ function Navigation() {
 
   const isMenuOpen = openMenuPath === pathname;
   const isAccountMenuOpen = openAccountMenuPath === pathname;
+  const hasUnreadOrderNotifications =
+    role === "customer"
+    && unreadNotifications.userId === userId
+    && unreadNotifications.order;
+  const hasUnreadReservationNotifications =
+    role === "customer"
+    && unreadNotifications.userId === userId
+    && unreadNotifications.reservation;
+
+  useEffect(() => {
+    if (loading || role !== "customer" || !userId) {
+      return undefined;
+    }
+
+    const unreadNotificationsQuery = query(
+      collection(db, "notifications"),
+      where("userId", "==", userId),
+      where("isRead", "==", false),
+    );
+
+    return onSnapshot(
+      unreadNotificationsQuery,
+      (snapshot) => {
+        const unreadTypes = { order: false, reservation: false };
+
+        snapshot.forEach((notification) => {
+          const type = notification.data().type;
+          if (type === "order" || type === "reservation") {
+            unreadTypes[type] = true;
+          }
+        });
+
+        setUnreadNotifications({ userId, ...unreadTypes });
+      },
+      (error) => {
+        console.error("Error listening for unread notifications:", error);
+        setUnreadNotifications({
+          userId,
+          order: false,
+          reservation: false,
+        });
+      },
+    );
+  }, [loading, role, userId]);
 
   const closeCart = useCallback(() => {
     setIsCartOpen(false);
@@ -58,6 +164,11 @@ function Navigation() {
   const proceedToCheckout = () => {
     setIsCartOpen(false);
     navigate("/checkout", { state: { cart } });
+  };
+
+  const continueShopping = () => {
+    closeCart();
+    navigate("/menu");
   };
 
   useEffect(() => {
@@ -121,7 +232,7 @@ function Navigation() {
       <nav className="navbar" aria-label="Main navigation">
         <div className="navbar-container">
           <NavLink
-            to="/"
+            to={homePath}
             className="navbar-logo"
             aria-label="Cactus Cafe home"
             onClick={() => {
@@ -189,7 +300,7 @@ function Navigation() {
           </div>
 
           <div className="navbar-tools">
-            {!loading && role !== "admin" && (
+            {!loading && user && role !== "admin" && (
               <button
                 ref={cartButtonRef}
                 type="button"
@@ -234,6 +345,30 @@ function Navigation() {
             )}
 
             {!loading && user && role === "customer" && (
+              <NavLink
+                to="/favorites"
+                className={({ isActive }) =>
+                  `navbar-favorites-link${isActive ? " active" : ""}`
+                }
+                aria-label="Favorites"
+                title="Favorites"
+                onClick={() => setOpenMenuPath(null)}
+              >
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z" />
+                </svg>
+              </NavLink>
+            )}
+
+            {!loading && user && role === "customer" && (
               <div className="navbar-account" ref={accountMenuRef}>
                 <button
                   ref={accountTriggerRef}
@@ -248,18 +383,7 @@ function Navigation() {
                     )
                   }
                 >
-                  <svg
-                    aria-hidden="true"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <circle cx="12" cy="8" r="3.5" />
-                    <path d="M5.5 20a6.5 6.5 0 0 1 13 0" />
-                  </svg>
+                  <AccountAvatar user={auth.currentUser} />
                 </button>
                 {isAccountMenuOpen && (
                   <div
@@ -269,6 +393,26 @@ function Navigation() {
                     aria-label="Account"
                   >
                     <p className="navbar-account-heading">Your account</p>
+                    <NavLink
+                      to="/my-account"
+                      className={accountLinkClass}
+                      onClick={() => setOpenAccountMenuPath(null)}
+                    >
+                      <svg
+                        className="navbar-account-icon"
+                        aria-hidden="true"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.8"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <circle cx="12" cy="8" r="3.5" />
+                        <path d="M5.5 20a6.5 6.5 0 0 1 13 0" />
+                      </svg>
+                      My Account
+                    </NavLink>
                     <NavLink
                       to="/my-orders"
                       className={accountLinkClass}
@@ -289,6 +433,13 @@ function Navigation() {
                         <path d="M10 12h4" />
                       </svg>
                       My Orders
+                      {hasUnreadOrderNotifications && (
+                        <span
+                          className="navbar-unread-dot"
+                          role="img"
+                          aria-label="Unread notifications"
+                        />
+                      )}
                     </NavLink>
                     <NavLink
                       to="/my-reservations"
@@ -309,6 +460,13 @@ function Navigation() {
                         <path d="M16 3v4M8 3v4M3 10h18" />
                       </svg>
                       My Reservations
+                      {hasUnreadReservationNotifications && (
+                        <span
+                          className="navbar-unread-dot"
+                          role="img"
+                          aria-label="Unread notifications"
+                        />
+                      )}
                     </NavLink>
                     <NavLink
                       to="/my-reviews"
@@ -389,6 +547,7 @@ function Navigation() {
         isOpen={isCartOpen}
         onClose={closeCart}
         onCheckout={proceedToCheckout}
+        onContinueShopping={continueShopping}
       />
     </>
   );

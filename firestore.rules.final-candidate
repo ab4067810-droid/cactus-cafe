@@ -1,0 +1,245 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
+    }
+
+    function validPublicReview(data) {
+      return data.keys().size() == 4
+        && data.keys().hasAll([
+          "rating",
+          "comment",
+          "createdAt",
+          "displayName"
+        ])
+        && data.rating is number
+        && data.rating >= 1
+        && data.rating <= 5
+        && data.comment is string
+        && data.comment.size() > 0
+        && data.comment.size() <= 500
+        && data.createdAt is timestamp
+        && data.displayName == "Cactus Café Customer";
+    }
+
+    function validText(value, maxLength) {
+      return value is string
+        && value.size() > 0
+        && value.size() <= maxLength;
+    }
+
+    function validRequestItem(item) {
+      return item is map
+        && item.keys().size() == 2
+        && item.keys().hasAll(["id", "quantity"])
+        && item.id is string
+        && item.id.size() > 0
+        && item.id.size() <= 1500
+        && !item.id.matches(".*[/].*")
+        && item.quantity is int
+        && item.quantity >= 1
+        && item.quantity <= 99;
+    }
+
+    function validRequestItems(items) {
+      return items is list
+        && items.size() >= 1
+        && items.size() <= 10
+        && validRequestItem(items[0])
+        && (items.size() <= 1 || validRequestItem(items[1]))
+        && (items.size() <= 2 || validRequestItem(items[2]))
+        && (items.size() <= 3 || validRequestItem(items[3]))
+        && (items.size() <= 4 || validRequestItem(items[4]))
+        && (items.size() <= 5 || validRequestItem(items[5]))
+        && (items.size() <= 6 || validRequestItem(items[6]))
+        && (items.size() <= 7 || validRequestItem(items[7]))
+        && (items.size() <= 8 || validRequestItem(items[8]))
+        && (items.size() <= 9 || validRequestItem(items[9]));
+    }
+
+    function validRequest(data) {
+      return data.customerId == request.auth.uid
+        && data.keys().size() == 10
+        && data.keys().hasAll([
+          "customerId",
+          "customerEmail",
+          "customerName",
+          "phone",
+          "items",
+          "orderType",
+          "address",
+          "notes",
+          "status",
+          "createdAt"
+        ])
+        && data.customerEmail is string
+        && data.customerEmail.size() <= 254
+        && (data.customerEmail == "" || data.customerEmail == request.auth.token.email)
+        && validText(data.customerName, 120)
+        && validText(data.phone, 40)
+        && validRequestItems(data.items)
+        && data.orderType in ["takeout", "delivery", "dine-in"]
+        && data.address is string
+        && data.address.size() <= 500
+        && (data.orderType != "delivery" || data.address.size() > 0)
+        && (data.orderType == "delivery" || data.address == "")
+        && data.notes is string
+        && data.notes.size() <= 1000
+        && data.status == "pending"
+        && data.createdAt == request.time;
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if isOwner(userId)
+        && request.resource.data.role == "customer";
+      allow update: if isAdmin()
+        || (isOwner(userId)
+          && resource.data.role == "customer"
+          && request.resource.data.role == resource.data.role);
+      allow delete: if isAdmin();
+    }
+
+    match /menuItems/{menuItemId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /orderRequests/{requestId} {
+      allow get, list: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow create: if signedIn() && validRequest(request.resource.data);
+      allow update: if isAdmin()
+        && (
+          (resource.data.status == "pending"
+            && request.resource.data.status == "rejected"
+            && request.resource.data.keys().size() == 13
+            && request.resource.data.keys().hasAll([
+              "customerId",
+              "customerEmail",
+              "customerName",
+              "phone",
+              "items",
+              "orderType",
+              "address",
+              "notes",
+              "status",
+              "createdAt",
+              "reviewedAt",
+              "reviewedBy",
+              "rejectionReason"
+            ])
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly([
+                "status",
+                "reviewedAt",
+                "reviewedBy",
+                "rejectionReason"
+              ])
+            && request.resource.data.reviewedAt == request.time
+            && request.resource.data.reviewedBy == request.auth.uid
+            && validText(request.resource.data.rejectionReason, 500))
+          || (resource.data.status == "approved"
+            && request.resource.data.status == "approved"
+            && resource.data.approvedOrder is map
+            && resource.data.orderStatus in [
+              "Pending",
+              "Confirmed",
+              "Preparing",
+              "Ready",
+              "Ready for Pickup",
+              "Out for Delivery",
+              "Completed",
+              "Cancelled"
+            ]
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(["orderStatus"])
+            && request.resource.data.orderStatus in [
+              "Pending",
+              "Confirmed",
+              "Preparing",
+              "Ready",
+              "Ready for Pickup",
+              "Out for Delivery",
+              "Completed",
+              "Cancelled"
+            ])
+        );
+      allow delete: if false;
+    }
+
+    match /orders/{orderId} {
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow create: if false;
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status"])
+        && request.resource.data.status in [
+          "Pending",
+          "Confirmed",
+          "Preparing",
+          "Ready",
+          "Ready for Pickup",
+          "Out for Delivery",
+          "Completed",
+          "Cancelled"
+        ];
+      allow delete: if false;
+    }
+
+    match /reservations/{reservationId} {
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.userId == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == "Pending";
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status"])
+        && request.resource.data.status in [
+          "Pending",
+          "Confirmed",
+          "Completed",
+          "Cancelled"
+        ];
+      allow delete: if false;
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.status == "Pending"
+        && request.resource.data.rating is number
+        && request.resource.data.rating >= 1
+        && request.resource.data.rating <= 5
+        && request.resource.data.comment is string
+        && request.resource.data.comment.size() > 0
+        && request.resource.data.comment.size() <= 500;
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status"])
+        && request.resource.data.status in ["Pending", "Approved", "Rejected"];
+      allow delete: if isAdmin();
+    }
+
+    match /publicReviews/{reviewId} {
+      allow read: if true;
+      allow create, update: if isAdmin()
+        && validPublicReview(request.resource.data);
+      allow delete: if isAdmin();
+    }
+  }
+}

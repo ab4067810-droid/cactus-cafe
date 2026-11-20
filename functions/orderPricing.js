@@ -1,5 +1,21 @@
 import { HttpsError } from "firebase-functions/v2/https";
 
+function priceToCents(price) {
+  const [coefficient, exponentPart] = price.toString().toLowerCase().split("e");
+  const [whole, fraction = ""] = coefficient.split(".");
+  const value = BigInt(`${whole}${fraction}`);
+  const scale = Number(exponentPart || 0) - fraction.length + 2;
+
+  if (scale >= 0) {
+    return value * 10n ** BigInt(scale);
+  }
+
+  const divisor = 10n ** BigInt(-scale);
+  const cents = value / divisor;
+  const remainder = value % divisor;
+  return remainder * 2n >= divisor ? cents + 1n : cents;
+}
+
 export function priceMenuItems(requestedItems, menuSnapshots) {
   if (requestedItems.length !== menuSnapshots.length) {
     throw new HttpsError(
@@ -8,7 +24,7 @@ export function priceMenuItems(requestedItems, menuSnapshots) {
     );
   }
 
-  let totalCents = 0;
+  let totalCents = 0n;
   const items = requestedItems.map((requestedItem, index) => {
     const menuSnapshot = menuSnapshots[index];
 
@@ -51,13 +67,24 @@ export function priceMenuItems(requestedItems, menuSnapshots) {
       );
     }
 
-    const priceCents = Math.round(menuItem.price * 100);
-    const subtotalCents = priceCents * requestedItem.quantity;
+    if (
+      !Number.isSafeInteger(requestedItem.quantity) ||
+      requestedItem.quantity <= 0
+    ) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Item quantities must be positive whole numbers."
+      );
+    }
+
+    const priceCents = priceToCents(menuItem.price);
+    const subtotalCents = priceCents * BigInt(requestedItem.quantity);
+    const orderTotalCents = totalCents + subtotalCents;
 
     if (
-      !Number.isSafeInteger(priceCents) ||
-      !Number.isSafeInteger(subtotalCents) ||
-      !Number.isSafeInteger(totalCents + subtotalCents)
+      priceCents > BigInt(Number.MAX_SAFE_INTEGER) ||
+      subtotalCents > BigInt(Number.MAX_SAFE_INTEGER) ||
+      orderTotalCents > BigInt(Number.MAX_SAFE_INTEGER)
     ) {
       throw new HttpsError(
         "invalid-argument",
@@ -65,16 +92,16 @@ export function priceMenuItems(requestedItems, menuSnapshots) {
       );
     }
 
-    totalCents += subtotalCents;
+    totalCents = orderTotalCents;
 
     return {
       id: menuSnapshot.id,
       name: menuItem.name.trim(),
-      price: priceCents / 100,
+      price: Number(priceCents) / 100,
       quantity: requestedItem.quantity,
-      subtotal: subtotalCents / 100,
+      subtotal: Number(subtotalCents) / 100,
     };
   });
 
-  return { items, total: totalCents / 100 };
+  return { items, total: Number(totalCents) / 100 };
 }

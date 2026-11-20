@@ -1,0 +1,190 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function userPath(userId) {
+      return /databases/$(database)/documents/users/$(userId);
+    }
+
+    function migrationPath() {
+      return /databases/$(database)/documents/menuControl/migration;
+    }
+
+    function priceBookPath() {
+      return /databases/$(database)/documents/menuControl/current;
+    }
+
+    function isCustomer() {
+      return request.auth != null
+        && exists(userPath(request.auth.uid))
+        && get(userPath(request.auth.uid)).data.role == "customer";
+    }
+
+    function validText(value, maxLength) {
+      return value is string
+        && value.size() > 0
+        && value.size() <= maxLength;
+    }
+
+    function validSnapshotItemAgainstPrice(item, entry) {
+      return entry is map
+        && entry.keys().hasOnly([
+          "name",
+          "priceCents",
+          "available",
+          "menuRevision"
+        ])
+        && entry.name is string
+        && entry.name.size() > 0
+        && entry.name.size() <= 200
+        && entry.priceCents is int
+        && entry.priceCents >= 0
+        && entry.priceCents <= 100000000
+        && entry.available is bool
+        && entry.available == true
+        && entry.menuRevision is int
+        && entry.menuRevision >= 1
+        && item.name == entry.name
+        && item.priceCents == entry.priceCents
+        && item.price == item.priceCents / 100
+        && item.subtotal == (item.priceCents * item.quantity) / 100;
+    }
+
+    function validSnapshotItem(item, prices) {
+      return item is map
+        && item.keys().hasOnly([
+          "id",
+          "name",
+          "quantity",
+          "priceCents",
+          "price",
+          "subtotal"
+        ])
+        && item.id is string
+        && item.id.size() > 0
+        && item.id.size() <= 1500
+        && !item.id.matches(".*[/].*")
+        && item.quantity is int
+        && item.quantity >= 1
+        && item.quantity <= 99
+        && item.name is string
+        && item.priceCents is int
+        && item.price is number
+        && item.subtotal is number
+        && prices.keys().hasAll([item.id])
+        && validSnapshotItemAgainstPrice(item, prices[item.id]);
+    }
+
+    function validSnapshotItems(items, prices) {
+      let count = items.size();
+      return items is list
+        && count >= 1
+        && count <= 10
+        && validSnapshotItem(items[0], prices)
+        && (count <= 1 || validSnapshotItem(items[1], prices))
+        && (count <= 2 || validSnapshotItem(items[2], prices))
+        && (count <= 3 || validSnapshotItem(items[3], prices))
+        && (count <= 4 || validSnapshotItem(items[4], prices))
+        && (count <= 5 || validSnapshotItem(items[5], prices))
+        && (count <= 6 || validSnapshotItem(items[6], prices))
+        && (count <= 7 || validSnapshotItem(items[7], prices))
+        && (count <= 8 || validSnapshotItem(items[8], prices))
+        && (count <= 9 || validSnapshotItem(items[9], prices));
+    }
+
+    function snapshotItemsHaveDistinctIds(items) {
+      let count = items.size();
+      let ids = [items[0].id]
+        .concat(count > 1 ? [items[1].id] : [])
+        .concat(count > 2 ? [items[2].id] : [])
+        .concat(count > 3 ? [items[3].id] : [])
+        .concat(count > 4 ? [items[4].id] : [])
+        .concat(count > 5 ? [items[5].id] : [])
+        .concat(count > 6 ? [items[6].id] : [])
+        .concat(count > 7 ? [items[7].id] : [])
+        .concat(count > 8 ? [items[8].id] : [])
+        .concat(count > 9 ? [items[9].id] : []);
+      return ids.toSet().size() == count;
+    }
+
+    function snapshotTotalCents(items) {
+      let count = items.size();
+      return items[0].priceCents * items[0].quantity
+        + (count > 1 ? items[1].priceCents * items[1].quantity : 0)
+        + (count > 2 ? items[2].priceCents * items[2].quantity : 0)
+        + (count > 3 ? items[3].priceCents * items[3].quantity : 0)
+        + (count > 4 ? items[4].priceCents * items[4].quantity : 0)
+        + (count > 5 ? items[5].priceCents * items[5].quantity : 0)
+        + (count > 6 ? items[6].priceCents * items[6].quantity : 0)
+        + (count > 7 ? items[7].priceCents * items[7].quantity : 0)
+        + (count > 8 ? items[8].priceCents * items[8].quantity : 0)
+        + (count > 9 ? items[9].priceCents * items[9].quantity : 0);
+    }
+
+    function validRequest(data) {
+      let priceBook = get(priceBookPath()).data;
+      return data.keys().hasOnly([
+          "customerId",
+          "customerName",
+          "customerEmail",
+          "phone",
+          "orderType",
+          "address",
+          "notes",
+          "items",
+          "totalCents",
+          "total",
+          "snapshotVersion",
+          "status",
+          "createdAt"
+        ])
+        && data.customerId == request.auth.uid
+        && validText(data.customerName, 120)
+        && data.customerEmail is string
+        && data.customerEmail.size() <= 254
+        && data.phone is string
+        && data.phone.size() <= 40
+        && data.orderType in ["takeout", "delivery", "dine-in"]
+        && data.address is string
+        && data.address.size() <= 500
+        && (data.orderType != "delivery" || data.address.size() > 0)
+        && (data.orderType == "delivery" || data.address == "")
+        && data.notes is string
+        && data.notes.size() <= 1000
+        && data.items is list
+        && data.items.size() >= 1
+        && data.items.size() <= 10
+        && validSnapshotItems(data.items, priceBook.prices)
+        && snapshotItemsHaveDistinctIds(data.items)
+        && data.totalCents is int
+        && data.totalCents >= 0
+        && data.totalCents == snapshotTotalCents(data.items)
+        && data.total is number
+        && data.total == data.totalCents / 100
+        && data.snapshotVersion is int
+        && data.snapshotVersion == 1
+        && data.status == "pending"
+        && data.createdAt == request.time
+        && exists(migrationPath())
+        && get(migrationPath()).data.state == "ready";
+    }
+
+    match /users/{userId} {
+      allow read: if request.auth != null
+        && request.auth.uid == userId;
+      allow write: if false;
+    }
+
+    match /menuControl/{controlId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    match /orderRequests/{requestId} {
+      allow get, list: if request.auth != null
+        && resource.data.customerId == request.auth.uid;
+      allow create: if isCustomer() && validRequest(request.resource.data);
+      allow update, delete: if false;
+    }
+  }
+}

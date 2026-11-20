@@ -1,0 +1,14 @@
+{
+  "firestore": {
+    "rules": "firestore.rules.prototype.price-book.migration-gate"
+  },
+  "emulators": {
+    "firestore": {
+      "host": "127.0.0.1",
+      "port": 8082
+    },
+    "ui": {
+      "enabled": false
+    }
+  }
+}

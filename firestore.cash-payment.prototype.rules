@@ -1,0 +1,87 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
+    }
+
+    function orderPath(orderId) {
+      return /databases/$(database)/documents/orders/$(orderId);
+    }
+
+    function paymentSelectionPath(orderId) {
+      return /databases/$(database)/documents/paymentSelections/$(orderId);
+    }
+
+    function cashPaymentRecordPath(orderId) {
+      return /databases/$(database)/documents/cashPaymentRecords/$(orderId);
+    }
+
+    function validCashPaymentConfirmation(orderId) {
+      let confirmation = request.resource.data;
+      let order = get(orderPath(orderId)).data;
+      let orderAfter = getAfter(orderPath(orderId)).data;
+      let selection = get(paymentSelectionPath(orderId)).data;
+      return !exists(cashPaymentRecordPath(orderId))
+        && exists(orderPath(orderId))
+        && order.requestId == orderId
+        && order.customerId is string
+        && order.customerId.size() > 0
+        && confirmation.orderId == orderId
+        && confirmation.customerId == order.customerId
+        && order.total is number
+        && order.total > 0
+        && order.status in [
+          "Pending",
+          "Confirmed",
+          "Preparing",
+          "Ready",
+          "Ready for Pickup",
+          "Out for Delivery",
+          "Completed"
+        ]
+        && orderAfter.status == order.status
+        && exists(paymentSelectionPath(orderId))
+        && selection.requestId == orderId
+        && selection.customerId == order.customerId
+        && selection.method == "cash"
+        && selection.timing in ["advance", "pay_later"]
+        && confirmation.keys().size() == 9
+        && confirmation.keys().hasAll([
+          "orderId",
+          "customerId",
+          "amountDue",
+          "amountReceived",
+          "paymentStatus",
+          "confirmedBy",
+          "confirmedAt",
+          "createdAt",
+          "updatedAt"
+        ])
+        && confirmation.amountDue is number
+        && confirmation.amountDue == order.total
+        && confirmation.amountReceived is number
+        && confirmation.amountReceived == order.total
+        && confirmation.paymentStatus == "paid"
+        && confirmation.confirmedBy == request.auth.uid
+        && confirmation.confirmedAt == request.time
+        && confirmation.createdAt == request.time
+        && confirmation.updatedAt == request.time;
+    }
+
+    match /cashPaymentRecords/{orderId} {
+      allow get, list: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow create: if isAdmin()
+        && validCashPaymentConfirmation(orderId);
+      allow update, delete: if false;
+    }
+  }
+}

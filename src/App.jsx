@@ -1,5 +1,5 @@
 import AppRoutes from "./routes/AppRoutes";
-import { AuthProvider } from "./context/AuthContext";
+import { AuthProvider } from "./context/Authcontext";
 import { CartProvider } from "./context/CartContext";
 import "./styles/App.css";
 

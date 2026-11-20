@@ -1,0 +1,74 @@
+.admin-phone-control {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 4px;
+}
+
+.admin-phone-blocked-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 3px 8px;
+  border: 1px solid oklch(78% 0.11 25);
+  border-radius: 999px;
+  background: oklch(96% 0.035 25);
+  color: oklch(42% 0.15 25);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.admin-phone-block-button {
+  min-height: 27px;
+  padding: 4px 9px;
+  border: 1px solid oklch(75% 0.12 25);
+  border-radius: 999px;
+  background: transparent;
+  color: oklch(42% 0.15 25);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.admin-phone-unblock-button {
+  min-height: 27px;
+  padding: 4px 9px;
+  border: 1px solid oklch(78% 0.11 25);
+  border-radius: 999px;
+  background: transparent;
+  color: oklch(42% 0.15 25);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.admin-phone-unblock-button:hover:not(:disabled) {
+  background: oklch(96% 0.035 25);
+}
+
+.admin-phone-unblock-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.admin-phone-block-button:hover:not(:disabled) {
+  background: oklch(96% 0.035 25);
+}
+
+.admin-phone-block-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.admin-phone-action-error {
+  flex-basis: 100%;
+  color: oklch(42% 0.15 25);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.4;
+}

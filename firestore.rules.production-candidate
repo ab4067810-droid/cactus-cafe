@@ -1,0 +1,482 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
+    }
+
+    function validText(value, maxLength) {
+      return value is string
+        && value.size() > 0
+        && value.size() <= maxLength;
+    }
+
+    function validRequestItem(item) {
+      return item is map
+        && item.keys().size() == 2
+        && item.keys().hasAll(["id", "quantity"])
+        && item.id is string
+        && item.id.size() > 0
+        && item.id.size() <= 1500
+        && !item.id.matches(".*[/].*")
+        && item.quantity is int
+        && item.quantity >= 1
+        && item.quantity <= 99;
+    }
+
+    function validRequestItems(items) {
+      return items is list
+        && items.size() >= 1
+        && items.size() <= 10
+        && validRequestItem(items[0])
+        && (items.size() <= 1 || validRequestItem(items[1]))
+        && (items.size() <= 2 || validRequestItem(items[2]))
+        && (items.size() <= 3 || validRequestItem(items[3]))
+        && (items.size() <= 4 || validRequestItem(items[4]))
+        && (items.size() <= 5 || validRequestItem(items[5]))
+        && (items.size() <= 6 || validRequestItem(items[6]))
+        && (items.size() <= 7 || validRequestItem(items[7]))
+        && (items.size() <= 8 || validRequestItem(items[8]))
+        && (items.size() <= 9 || validRequestItem(items[9]));
+    }
+
+    function validRequest(data) {
+      return data.customerId == request.auth.uid
+        && data.keys().size() == 10
+        && data.keys().hasAll([
+          "customerId",
+          "customerEmail",
+          "customerName",
+          "phone",
+          "items",
+          "orderType",
+          "address",
+          "notes",
+          "status",
+          "createdAt"
+        ])
+        && data.customerEmail is string
+        && data.customerEmail.size() <= 254
+        && (data.customerEmail == "" || data.customerEmail == request.auth.token.email)
+        && validText(data.customerName, 120)
+        && validText(data.phone, 40)
+        && validRequestItems(data.items)
+        && data.orderType in ["takeout", "delivery", "dine-in"]
+        && data.address is string
+        && data.address.size() <= 500
+        && (data.orderType != "delivery" || data.address.size() > 0)
+        && (data.orderType == "delivery" || data.address == "")
+        && data.notes is string
+        && data.notes.size() <= 1000
+        && data.status == "pending"
+        && data.createdAt == request.time;
+    }
+
+    function validPublicReview(data) {
+      return data.keys().size() == 4
+        && data.keys().hasAll([
+          "rating",
+          "comment",
+          "createdAt",
+          "displayName"
+        ])
+        && data.rating is number
+        && data.rating >= 1
+        && data.rating <= 5
+        && data.comment is string
+        && data.comment.size() > 0
+        && data.comment.size() <= 500
+        && data.createdAt is timestamp
+        && data.displayName == "Cactus Café Customer";
+    }
+
+    function menuPath(menuItemId) {
+      return /databases/$(database)/documents/menuItems/$(menuItemId);
+    }
+
+    function priceBookPath() {
+      return /databases/$(database)/documents/menuControl/current;
+    }
+
+    function migrationPath() {
+      return /databases/$(database)/documents/menuControl/migration;
+    }
+
+    function migrationOperatorPath(userId) {
+      return /databases/$(database)/documents/migrationOperators/$(userId);
+    }
+
+    function isMigrating() {
+      return exists(migrationPath())
+        && get(migrationPath()).data.state == "migrating";
+    }
+
+    function isMigrationOperator() {
+      return isAdmin()
+        && exists(migrationOperatorPath(request.auth.uid))
+        && get(migrationOperatorPath(request.auth.uid)).data.enabled == true;
+    }
+
+    function menuWritesAllowed() {
+      return exists(migrationPath())
+        && existsAfter(migrationPath())
+        && get(migrationPath()).data.state == getAfter(migrationPath()).data.state
+        && get(migrationPath()).data.state in ["migrating", "ready"];
+    }
+
+    function validMigrationState(data) {
+      return data.keys().size() == 4
+        && data.keys().hasAll(["state", "startedAt", "updatedAt", "updatedBy"])
+        && data.keys().hasOnly(["state", "startedAt", "updatedAt", "updatedBy"])
+        && data.state in ["migrating", "finalizing", "ready"]
+        && data.startedAt is timestamp
+        && data.updatedAt == request.time
+        && data.updatedBy == request.auth.uid;
+    }
+
+    function validMenuItem(data) {
+      return data.price is number
+        && data.price >= 0
+        && data.price <= 1000000
+        && data.available is bool
+        && data.menuRevision is int
+        && data.menuRevision >= 1;
+    }
+
+    function validPriceEntry(entry) {
+      return entry is map
+        && entry.keys().size() == 3
+        && entry.keys().hasAll(["priceCents", "available", "menuRevision"])
+        && entry.keys().hasOnly(["priceCents", "available", "menuRevision"])
+        && entry.priceCents is int
+        && entry.priceCents >= 0
+        && entry.priceCents <= 100000000
+        && entry.available is bool
+        && entry.menuRevision is int
+        && entry.menuRevision >= 1;
+    }
+
+    function priceEntryMatchesMenu(entry, menuData) {
+      return validPriceEntry(entry)
+        && validMenuItem(menuData)
+        && entry.priceCents == math.round(menuData.price * 100)
+        && entry.available == menuData.available
+        && entry.menuRevision == menuData.menuRevision;
+    }
+
+    function bookMetadataValid(data) {
+      return data.keys().size() == 4
+        && data.keys().hasAll([
+          "revision",
+          "updatedAt",
+          "lastChangedMenuItemId",
+          "prices"
+        ])
+        && data.keys().hasOnly([
+          "revision",
+          "updatedAt",
+          "lastChangedMenuItemId",
+          "prices"
+        ])
+        && data.revision is int
+        && data.revision >= 1
+        && data.updatedAt == request.time
+        && data.lastChangedMenuItemId is string
+        && data.lastChangedMenuItemId.size() > 0
+        && data.prices is map;
+    }
+
+    function exactlyOnePriceEntryChanged(beforePrices, afterPrices, itemId) {
+      let changed = afterPrices.diff(beforePrices).affectedKeys();
+      return changed.hasOnly([itemId]) && changed.hasAll([itemId]);
+    }
+
+    function priceBookUpdateMatches(itemId) {
+      let before = get(priceBookPath()).data;
+      let after = getAfter(priceBookPath()).data;
+      return bookMetadataValid(after)
+        && after.revision == before.revision + 1
+        && after.lastChangedMenuItemId == itemId
+        && exactlyOnePriceEntryChanged(
+          before.prices,
+          after.prices,
+          itemId
+        );
+    }
+
+    function initialPriceBookMatches(itemId, menuData) {
+      let after = getAfter(priceBookPath()).data;
+      return bookMetadataValid(after)
+        && after.revision == 1
+        && after.lastChangedMenuItemId == itemId
+        && after.prices.keys().size() == 1
+        && after.prices.keys().hasAll([itemId])
+        && priceEntryMatchesMenu(after.prices[itemId], menuData);
+    }
+
+    function validPriceBookCreate() {
+      let itemId = request.resource.data.lastChangedMenuItemId;
+      let menuBefore = get(menuPath(itemId));
+      let menuAfter = getAfter(menuPath(itemId));
+      return isAdmin()
+        && menuWritesAllowed()
+        && bookMetadataValid(request.resource.data)
+        && request.resource.data.revision == 1
+        && request.resource.data.prices.keys().size() == 1
+        && request.resource.data.prices.keys().hasAll([itemId])
+        && existsAfter(menuPath(itemId))
+        && (
+          !exists(menuPath(itemId))
+          || (
+            isMigrating()
+            && !menuBefore.data.keys().hasAny(["menuRevision"])
+            && menuAfter.data.diff(menuBefore.data).affectedKeys()
+              .hasAll(["menuRevision"])
+          )
+        )
+        && menuAfter.data.menuRevision == 1
+        && priceEntryMatchesMenu(
+          request.resource.data.prices[itemId],
+          menuAfter.data
+        );
+    }
+
+    function validPriceBookUpdate() {
+      let itemId = request.resource.data.lastChangedMenuItemId;
+      let menuBefore = get(menuPath(itemId));
+      let menuAfter = getAfter(menuPath(itemId));
+      let newPrices = request.resource.data.prices;
+      let oldPrices = resource.data.prices;
+      return isAdmin()
+        && menuWritesAllowed()
+        && bookMetadataValid(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly([
+            "revision",
+            "updatedAt",
+            "lastChangedMenuItemId",
+            "prices"
+          ])
+        && request.resource.data.revision == resource.data.revision + 1
+        && exactlyOnePriceEntryChanged(oldPrices, newPrices, itemId)
+        && (
+          (
+            existsAfter(menuPath(itemId))
+            && (
+              (
+                exists(menuPath(itemId))
+                && (
+                  menuBefore.data.keys().hasAny(["menuRevision"])
+                    ? menuAfter.data.menuRevision == menuBefore.data.menuRevision + 1
+                    : isMigrating()
+                      && menuAfter.data.menuRevision == 1
+                )
+              )
+              || (
+                !exists(menuPath(itemId))
+                && menuAfter.data.menuRevision == 1
+              )
+            )
+            && newPrices.keys().hasAll([itemId])
+            && priceEntryMatchesMenu(
+              newPrices[itemId],
+              menuAfter.data
+            )
+          )
+          || (
+            exists(menuPath(itemId))
+            && !existsAfter(menuPath(itemId))
+            && !newPrices.keys().hasAny([itemId])
+          )
+        );
+    }
+
+    function menuCreatePaired(menuItemId, menuData) {
+      return (
+          exists(priceBookPath())
+          && menuWritesAllowed()
+          && priceBookUpdateMatches(menuItemId)
+          && getAfter(priceBookPath()).data.prices.keys().hasAll([menuItemId])
+          && priceEntryMatchesMenu(
+            getAfter(priceBookPath()).data.prices[menuItemId],
+            menuData
+          )
+        )
+        || (
+          !exists(priceBookPath())
+          && menuWritesAllowed()
+          && initialPriceBookMatches(menuItemId, menuData)
+        );
+    }
+
+    function menuUpdatePaired(menuItemId, menuData) {
+      return menuWritesAllowed()
+        && (
+          (
+            exists(priceBookPath())
+            && priceBookUpdateMatches(menuItemId)
+            && getAfter(priceBookPath()).data.prices.keys().hasAll([menuItemId])
+            && priceEntryMatchesMenu(
+              getAfter(priceBookPath()).data.prices[menuItemId],
+              menuData
+            )
+          )
+          || (
+            !exists(priceBookPath())
+            && isMigrating()
+            && initialPriceBookMatches(menuItemId, menuData)
+          )
+        );
+    }
+
+    function menuDeletePaired(menuItemId) {
+      let bookAfter = getAfter(priceBookPath()).data;
+      return menuWritesAllowed()
+        && priceBookUpdateMatches(menuItemId)
+        && !bookAfter.prices.keys().hasAny([menuItemId]);
+    }
+
+    match /users/{userId} {
+      allow read: if request.auth != null
+        && (request.auth.uid == userId
+          || (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin"));
+
+      allow create: if request.auth != null && request.auth.uid == userId;
+      allow update: if request.auth != null && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
+    match /orderRequests/{requestId} {
+      allow get, list: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid);
+
+      allow create: if signedIn()
+        && validRequest(request.resource.data);
+
+      allow update, delete: if false;
+    }
+
+    match /orders/{orderId} {
+      allow create: if request.auth != null
+        && request.resource.data.customerId == request.auth.uid;
+
+      allow read: if request.auth != null
+        && (resource.data.customerId == request.auth.uid
+          || (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin"));
+
+      allow update, delete: if request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
+    }
+
+    match /reservations/{reservationId} {
+      allow create: if request.auth != null
+        && request.resource.data.userId == request.auth.uid;
+
+      allow read: if request.auth != null
+        && (resource.data.userId == request.auth.uid
+          || (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin"));
+
+      allow update, delete: if request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
+    }
+
+    match /reviews/{reviewId} {
+      allow create: if request.auth != null
+        && request.resource.data.customerId == request.auth.uid;
+
+      allow read: if request.auth != null
+        && (resource.data.customerId == request.auth.uid
+          || (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin"));
+
+      allow update, delete: if request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
+    }
+
+    match /publicReviews/{reviewId} {
+      allow read: if true;
+
+      allow create, update: if isAdmin()
+        && validPublicReview(request.resource.data);
+
+      allow delete: if isAdmin();
+    }
+
+    match /menuItems/{menuItemId} {
+      allow read: if true;
+      allow create: if isAdmin()
+        && validMenuItem(request.resource.data)
+        && request.resource.data.menuRevision == 1
+        && menuCreatePaired(menuItemId, request.resource.data);
+      allow update: if isAdmin()
+        && validMenuItem(request.resource.data)
+        && (
+          resource.data.keys().hasAny(["menuRevision"])
+            ? request.resource.data.menuRevision == resource.data.menuRevision + 1
+            : isMigrating()
+              && request.resource.data.menuRevision == 1
+        )
+        && menuUpdatePaired(menuItemId, request.resource.data);
+      allow delete: if isAdmin() && menuDeletePaired(menuItemId);
+    }
+
+    match /menuControl/current {
+      allow read: if true;
+      allow create: if validPriceBookCreate();
+      allow update: if validPriceBookUpdate();
+      allow delete: if false;
+    }
+
+    match /menuControl/migration {
+      allow get: if isAdmin();
+      allow list: if false;
+      allow create: if isMigrationOperator()
+        && validMigrationState(request.resource.data)
+        && request.resource.data.state == "migrating"
+        && request.resource.data.startedAt == request.time;
+      allow update: if isMigrationOperator()
+        && resource.data.state in ["migrating", "finalizing"]
+        && validMigrationState(request.resource.data)
+        && request.resource.data.startedAt == resource.data.startedAt
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["state", "updatedAt", "updatedBy"])
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasAll(["state"])
+        && (
+          (
+            resource.data.state == "migrating"
+            && request.resource.data.state == "finalizing"
+          )
+          || (
+            resource.data.state == "finalizing"
+            && request.resource.data.state == "ready"
+          )
+        );
+      allow delete: if false;
+    }
+
+    match /migrationOperators/{operatorId} {
+      allow get: if isOwner(operatorId);
+      allow list: if false;
+      allow create, update, delete: if false;
+    }
+  }
+}

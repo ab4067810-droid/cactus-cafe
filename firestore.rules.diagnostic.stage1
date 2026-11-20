@@ -1,0 +1,385 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
+    }
+
+    function requestPath(requestId) {
+      return /databases/$(database)/documents/orderRequests/$(requestId);
+    }
+
+    function orderPath(orderId) {
+      return /databases/$(database)/documents/orders/$(orderId);
+    }
+
+    function validText(value, maxLength) {
+      return value is string
+        && value.size() > 0
+        && value.size() <= maxLength;
+    }
+
+    function validRequestItem(item) {
+      return item is map
+        && item.keys().hasAll(["id", "quantity"])
+        && item.keys().hasOnly(["id", "quantity"])
+        && item.id is string
+        && item.id.size() > 0
+        && item.id.size() <= 1500
+        && !item.id.matches(".*[/].*")
+        && item.quantity is int
+        && item.quantity >= 1
+        && item.quantity <= 99;
+    }
+
+    function validRequestItems(items) {
+      return items is list
+        && items.size() >= 1
+        && items.size() <= 10
+        && validRequestItem(items[0])
+        && (items.size() <= 1 || validRequestItem(items[1]))
+        && (items.size() <= 2 || validRequestItem(items[2]))
+        && (items.size() <= 3 || validRequestItem(items[3]))
+        && (items.size() <= 4 || validRequestItem(items[4]))
+        && (items.size() <= 5 || validRequestItem(items[5]))
+        && (items.size() <= 6 || validRequestItem(items[6]))
+        && (items.size() <= 7 || validRequestItem(items[7]))
+        && (items.size() <= 8 || validRequestItem(items[8]))
+        && (items.size() <= 9 || validRequestItem(items[9]));
+    }
+
+    function validRequest(data) {
+      return data.keys().hasAll([
+          "customerId",
+          "customerEmail",
+          "customerName",
+          "phone",
+          "items",
+          "orderType",
+          "address",
+          "notes",
+          "status",
+          "createdAt"
+        ])
+        && data.keys().hasOnly([
+          "customerId",
+          "customerEmail",
+          "customerName",
+          "phone",
+          "items",
+          "orderType",
+          "address",
+          "notes",
+          "status",
+          "createdAt"
+        ])
+        && data.customerId == request.auth.uid
+        && data.customerEmail is string
+        && data.customerEmail.size() <= 254
+        && (data.customerEmail == "" || data.customerEmail == request.auth.token.email)
+        && validText(data.customerName, 120)
+        && validText(data.phone, 40)
+        && validRequestItems(data.items)
+        && data.orderType in ["takeout", "delivery", "dine-in"]
+        && data.address is string
+        && data.address.size() <= 500
+        && (data.orderType != "delivery" || data.address.size() > 0)
+        && (data.orderType == "delivery" || data.address == "")
+        && data.notes is string
+        && data.notes.size() <= 1000
+        && data.status == "pending"
+        && data.createdAt == request.time;
+    }
+
+    function validOrderItem(orderItem, requestedItem) {
+      return orderItem is map
+        && orderItem.keys().size() == 5
+        && orderItem.keys().hasAll([
+          "id",
+          "name",
+          "price",
+          "quantity",
+          "subtotal"
+        ])
+        && orderItem.id == requestedItem.id
+        && validText(orderItem.name, 200)
+        && orderItem.price is number
+        && orderItem.price >= 0
+        && orderItem.price <= 1000000
+        && orderItem.quantity is int
+        && orderItem.quantity == requestedItem.quantity
+        && orderItem.subtotal is number
+        && math.abs(
+          orderItem.subtotal - orderItem.price * orderItem.quantity
+        ) <= 0.000001;
+    }
+
+    function validOrderItems(orderItems, requestedItems) {
+      let orderItemCount = orderItems.size();
+      let requestedItemCount = requestedItems.size();
+      return orderItems is list
+        && orderItemCount == requestedItemCount
+        && validOrderItem(orderItems[0], requestedItems[0])
+        && (requestedItemCount <= 1
+          || validOrderItem(orderItems[1], requestedItems[1]))
+        && (requestedItemCount <= 2
+          || validOrderItem(orderItems[2], requestedItems[2]))
+        && (requestedItemCount <= 3
+          || validOrderItem(orderItems[3], requestedItems[3]))
+        && (requestedItemCount <= 4
+          || validOrderItem(orderItems[4], requestedItems[4]))
+        && (requestedItemCount <= 5
+          || validOrderItem(orderItems[5], requestedItems[5]))
+        && (requestedItemCount <= 6
+          || validOrderItem(orderItems[6], requestedItems[6]))
+        && (requestedItemCount <= 7
+          || validOrderItem(orderItems[7], requestedItems[7]))
+        && (requestedItemCount <= 8
+          || validOrderItem(orderItems[8], requestedItems[8]))
+        && (requestedItemCount <= 9
+          || validOrderItem(orderItems[9], requestedItems[9]));
+    }
+
+    function orderTotalMatches(orderItems, total) {
+      let itemCount = orderItems.size();
+      return total is number
+        && total >= 0
+        && math.abs(total - (
+          orderItems[0].subtotal
+          + (itemCount > 1 ? orderItems[1].subtotal : 0)
+          + (itemCount > 2 ? orderItems[2].subtotal : 0)
+          + (itemCount > 3 ? orderItems[3].subtotal : 0)
+          + (itemCount > 4 ? orderItems[4].subtotal : 0)
+          + (itemCount > 5 ? orderItems[5].subtotal : 0)
+          + (itemCount > 6 ? orderItems[6].subtotal : 0)
+          + (itemCount > 7 ? orderItems[7].subtotal : 0)
+          + (itemCount > 8 ? orderItems[8].subtotal : 0)
+          + (itemCount > 9 ? orderItems[9].subtotal : 0)
+        )) <= 0.000001;
+    }
+
+    function orderMatchesRequest(order, orderId, requestId, orderRequest) {
+      return orderId == requestId
+        && order.keys().size() == 12
+        && order.keys().hasAll([
+          "requestId",
+          "customerId",
+          "customerEmail",
+          "customerName",
+          "phone",
+          "orderType",
+          "address",
+          "notes",
+          "items",
+          "total",
+          "status",
+          "createdAt"
+        ])
+        && order.requestId == requestId
+        && order.customerId == orderRequest.customerId
+        && order.customerEmail == orderRequest.customerEmail
+        && order.customerName == orderRequest.customerName
+        && order.phone == orderRequest.phone
+        && order.orderType == orderRequest.orderType
+        && order.address == orderRequest.address
+        && order.notes == orderRequest.notes
+        && order.status == "Pending"
+        && order.createdAt == request.time
+        && validOrderItems(order.items, orderRequest.items)
+        && orderTotalMatches(order.items, order.total);
+    }
+
+    function requestApprovalMatchesOrder(orderRequest, requestId) {
+      return orderRequest.status == "approved"
+        && orderRequest.orderId == requestId
+        && orderRequest.reviewedBy == request.auth.uid
+        && orderRequest.reviewedAt == request.time;
+    }
+
+    function validOrderCreation(order, orderId) {
+      return exists(requestPath(orderId))
+        && get(requestPath(orderId)).data.status == "pending"
+        && existsAfter(requestPath(orderId))
+        && requestApprovalMatchesOrder(
+          getAfter(requestPath(orderId)).data,
+          orderId
+        )
+        && orderMatchesRequest(
+          order,
+          orderId,
+          orderId,
+          get(requestPath(orderId)).data
+        );
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if isOwner(userId)
+        && request.resource.data.role == "customer";
+      allow update: if isAdmin()
+        || (isOwner(userId)
+          && resource.data.role == "customer"
+          && request.resource.data.role == resource.data.role);
+      allow delete: if isAdmin();
+    }
+
+    match /menuItems/{menuItemId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /orderRequests/{requestId} {
+      allow get, list: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow create: if signedIn() && validRequest(request.resource.data);
+      allow update: if isAdmin()
+        && resource.data.status == "pending"
+        && !exists(orderPath(requestId))
+        && existsAfter(orderPath(requestId))
+        && request.resource.data.status == "approved"
+        && request.resource.data.keys().hasAll([
+          "customerId",
+          "customerEmail",
+          "customerName",
+          "phone",
+          "items",
+          "orderType",
+          "address",
+          "notes",
+          "status",
+          "createdAt",
+          "orderId",
+          "reviewedAt",
+          "reviewedBy"
+        ])
+        && request.resource.data.keys().hasOnly([
+          "customerId",
+          "customerEmail",
+          "customerName",
+          "phone",
+          "items",
+          "orderType",
+          "address",
+          "notes",
+          "status",
+          "createdAt",
+          "orderId",
+          "reviewedAt",
+          "reviewedBy"
+        ])
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["status", "orderId", "reviewedAt", "reviewedBy"])
+        && request.resource.data.orderId == requestId
+        && request.resource.data.reviewedAt == request.time
+        && request.resource.data.reviewedBy == request.auth.uid
+        || isAdmin()
+        && resource.data.status == "pending"
+        && !exists(orderPath(requestId))
+        && !existsAfter(orderPath(requestId))
+        && request.resource.data.status == "rejected"
+        && request.resource.data.keys().hasAll([
+          "customerId",
+          "customerEmail",
+          "customerName",
+          "phone",
+          "items",
+          "orderType",
+          "address",
+          "notes",
+          "status",
+          "createdAt",
+          "reviewedAt",
+          "reviewedBy",
+          "rejectionReason"
+        ])
+        && request.resource.data.keys().hasOnly([
+          "customerId",
+          "customerEmail",
+          "customerName",
+          "phone",
+          "items",
+          "orderType",
+          "address",
+          "notes",
+          "status",
+          "createdAt",
+          "reviewedAt",
+          "reviewedBy",
+          "rejectionReason"
+        ])
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["status", "reviewedAt", "reviewedBy", "rejectionReason"])
+        && request.resource.data.reviewedAt == request.time
+        && request.resource.data.reviewedBy == request.auth.uid
+        && validText(request.resource.data.rejectionReason, 500);
+      allow delete: if false;
+    }
+
+    match /orders/{orderId} {
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow create: if isAdmin()
+        && orderId == request.resource.data.requestId;
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status"])
+        && request.resource.data.status in [
+          "Pending",
+          "Confirmed",
+          "Preparing",
+          "Ready",
+          "Ready for Pickup",
+          "Out for Delivery",
+          "Completed",
+          "Cancelled"
+        ];
+      allow delete: if false;
+    }
+
+    match /reservations/{reservationId} {
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.userId == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == "Pending";
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status"])
+        && request.resource.data.status in [
+          "Pending",
+          "Confirmed",
+          "Completed",
+          "Cancelled"
+        ];
+      allow delete: if false;
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.status == "Pending"
+        && request.resource.data.rating is number
+        && request.resource.data.rating >= 1
+        && request.resource.data.rating <= 5
+        && request.resource.data.comment is string
+        && request.resource.data.comment.size() > 0
+        && request.resource.data.comment.size() <= 500;
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status"])
+        && request.resource.data.status in ["Pending", "Approved", "Rejected"];
+      allow delete: if isAdmin();
+    }
+  }
+}

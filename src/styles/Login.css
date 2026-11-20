@@ -494,6 +494,46 @@
   text-align: center;
 }
 
+.login-legal-link {
+  border-radius: 3px;
+  color: #275d3b;
+  font-weight: 750;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.login-legal-link:hover {
+  color: #1f5a38;
+}
+
+.login-legal-link:focus-visible {
+  outline: 2px solid #275d3b;
+  outline-offset: 3px;
+}
+
+.login-footer .login-register-prompt {
+  margin-top: 13px;
+  color: #68716b;
+  font-size: 0.76rem;
+}
+
+.login-register-prompt a {
+  border-radius: 3px;
+  color: #275d3b;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.login-register-prompt a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.login-register-prompt a:focus-visible {
+  outline: 2px solid #275d3b;
+  outline-offset: 3px;
+}
+
 /* =========================================
    RESPONSIVE
 ========================================= */
@@ -501,7 +541,10 @@
 @media (max-width: 600px) {
   .login-page {
     min-height: 100svh;
+    align-items: flex-start;
     padding: 76px 14px 20px;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 
   .login-brand {
@@ -512,12 +555,31 @@
   .login-card {
     width: 100%;
     max-width: 390px;
+    min-width: 0;
+    margin: auto 0;
     padding: 32px 24px 27px;
     border-radius: 27px;
   }
 
   .login-title {
     font-size: 2.15rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .login-page {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .login-card {
+    padding-right: 20px;
+    padding-left: 20px;
+  }
+
+  .login-title {
+    font-size: clamp(1.9rem, 9vw, 2.15rem);
+    overflow-wrap: anywhere;
   }
 }
 

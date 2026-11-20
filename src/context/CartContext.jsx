@@ -2,6 +2,11 @@ import { createContext, useContext, useState } from "react";
 
 const CartContext = createContext(null);
 
+// eslint-disable-next-line react-refresh/only-export-components
+export const getCartItemKey = (item) => (
+  `${item.id}_${item.selectedSize || "default"}`
+);
+
 export function CartProvider({ children }) {
   const [cart, setCart] = useState([]);
   const [cartChangeKey, setCartChangeKey] = useState(0);
@@ -9,12 +14,12 @@ export function CartProvider({ children }) {
   const addToCart = (item) => {
     setCart((currentCart) => {
       const existingItem = currentCart.find(
-        (cartItem) => cartItem.id === item.id
+        (cartItem) => getCartItemKey(cartItem) === getCartItemKey(item)
       );
 
       if (existingItem) {
         return currentCart.map((cartItem) =>
-          cartItem.id === item.id
+          getCartItemKey(cartItem) === getCartItemKey(item)
             ? {
                 ...cartItem,
                 quantity: cartItem.quantity + 1,
@@ -34,10 +39,10 @@ export function CartProvider({ children }) {
     setCartChangeKey((key) => key + 1);
   };
 
-  const increaseQuantity = (id) => {
+  const increaseQuantity = (cartItemKey) => {
     setCart((currentCart) =>
       currentCart.map((item) =>
-        item.id === id
+        getCartItemKey(item) === cartItemKey
           ? {
               ...item,
               quantity: item.quantity + 1,
@@ -48,11 +53,11 @@ export function CartProvider({ children }) {
     setCartChangeKey((key) => key + 1);
   };
 
-  const decreaseQuantity = (id) => {
+  const decreaseQuantity = (cartItemKey) => {
     setCart((currentCart) =>
       currentCart
         .map((item) =>
-          item.id === id
+          getCartItemKey(item) === cartItemKey
             ? {
                 ...item,
                 quantity: item.quantity - 1,
@@ -63,9 +68,9 @@ export function CartProvider({ children }) {
     );
   };
 
-  const removeFromCart = (id) => {
+  const removeFromCart = (cartItemKey) => {
     setCart((currentCart) =>
-      currentCart.filter((item) => item.id !== id)
+      currentCart.filter((item) => getCartItemKey(item) !== cartItemKey)
     );
   };
 
