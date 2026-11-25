@@ -9,6 +9,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
 
 import { auth, db } from "../services/firebase";
+import { getEffectiveRole } from "../utils/userRole";
 
 /**
  * AuthContext
@@ -53,6 +54,14 @@ export function AuthProvider({ children }) {
       setUser({
         uid: currentUser.uid,
         email: currentUser.email,
+        displayName:
+          typeof currentUser.displayName === "string"
+            ? currentUser.displayName
+            : "",
+        photoURL:
+          typeof currentUser.photoURL === "string"
+            ? currentUser.photoURL
+            : "",
       });
 
       unsubscribeProfile = onSnapshot(
@@ -68,9 +77,34 @@ export function AuthProvider({ children }) {
             return;
           }
 
-          const userRole = userSnapshot.data().role;
+          const profile = userSnapshot.data();
+          const profileName =
+            typeof profile.fullName === "string" && profile.fullName.trim()
+              ? profile.fullName.trim()
+              : typeof profile.name === "string"
+                ? profile.name.trim()
+                : "";
 
-          if (typeof userRole !== "string" || !userRole.trim()) {
+          setUser({
+            uid: currentUser.uid,
+            email: currentUser.email,
+            displayName:
+              typeof currentUser.displayName === "string"
+                && currentUser.displayName.trim()
+                ? currentUser.displayName
+                : profileName,
+            photoURL:
+              typeof currentUser.photoURL === "string"
+                && currentUser.photoURL.trim()
+                ? currentUser.photoURL
+                : typeof profile.photoURL === "string"
+                  ? profile.photoURL
+                  : "",
+          });
+
+          const userRole = getEffectiveRole(profile);
+
+          if (!userRole) {
             setRole(null);
             setRoleError("Your account role could not be verified.");
             return;
@@ -107,6 +141,7 @@ export function AuthProvider({ children }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth() {
   return useContext(AuthContext);
 }

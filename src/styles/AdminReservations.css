@@ -58,13 +58,15 @@
 
 .admin-reservations-brand-mark {
   display: grid;
-  width: 43px;
-  height: 43px;
+  width: 36px;
+  height: 36px;
   flex: 0 0 auto;
   place-items: center;
-  border-radius: 14px;
-  background: var(--reservation-green-soft);
-  font-size: 24px;
+  border-radius: 12px;
+  background: var(--color-primary);
+  color: var(--color-white);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.2rem;
   line-height: 1;
 }
 
@@ -722,6 +724,113 @@
   font-size: 12px;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.admin-reservation-payment .admin-reservation-payment-proof {
+  grid-column: 1 / -1;
+}
+
+.admin-reservation-payment-proof .admin-reservation-receipt-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.admin-reservation-receipt-thumbnail {
+  display: grid;
+  width: fit-content;
+  justify-items: start;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--reservation-green-dark);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 750;
+  text-align: left;
+  cursor: zoom-in;
+}
+
+.admin-reservation-receipt-thumbnail img {
+  display: block;
+  width: 88px;
+  height: 88px;
+  border: 1px solid var(--reservation-border);
+  border-radius: 8px;
+  background: var(--reservation-surface);
+  object-fit: cover;
+}
+
+.admin-reservation-receipt-original,
+.admin-reservation-receipt-dialog-content > a {
+  width: fit-content;
+  color: var(--reservation-green-dark);
+  font-size: 12px;
+  font-weight: 750;
+  text-underline-offset: 3px;
+}
+
+.admin-reservation-payment-proof > p {
+  max-width: 620px;
+  margin: 3px 0 0;
+  color: var(--reservation-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.admin-reservation-receipt-dialog {
+  width: min(900px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100vh - 32px);
+  padding: 18px;
+  border: 1px solid var(--reservation-border);
+  border-radius: 14px;
+  background: var(--reservation-surface);
+  color: var(--reservation-ink);
+}
+
+.admin-reservation-receipt-dialog::backdrop {
+  background: rgb(20 31 24 / 68%);
+}
+
+.admin-reservation-receipt-dialog-content {
+  display: grid;
+  justify-items: start;
+  gap: 14px;
+}
+
+.admin-reservation-receipt-dialog-content header {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.admin-reservation-receipt-dialog-content h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.admin-reservation-receipt-dialog-content header button {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--reservation-border);
+  border-radius: 9px;
+  background: var(--reservation-soft);
+  color: var(--reservation-ink);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.admin-reservation-receipt-dialog-content > img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 150px);
+  border-radius: 8px;
+  object-fit: contain;
 }
 
 .admin-reservation-payment .admin-reservation-payment-reference {

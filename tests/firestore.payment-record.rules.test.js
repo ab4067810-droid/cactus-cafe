@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { after, before, beforeEach, describe, it } from "node:test";
 import {
-  assertFails,
   assertSucceeds,
   initializeTestEnvironment,
 } from "@firebase/rules-unit-testing";
@@ -64,7 +63,7 @@ function makeSubmission(
   orderId,
   attemptNumber = 1,
   customerId = "customer-1",
-  referenceNumber = `QR-REF-${attemptNumber}`,
+  referenceNumber = `QRREF${orderId.replace(/[^A-Z0-9]/gi, "").toUpperCase()}${attemptNumber}`,
   overrides = {},
 ) {
   return {
@@ -133,6 +132,18 @@ async function seedQrOrder(
 
 async function submitFirst(firestore, orderId, overrides = {}) {
   const batch = writeBatch(firestore);
+  const referenceNumber =
+    overrides.referenceNumber ||
+    `QRREF${orderId.replace(/[^A-Z0-9]/gi, "").toUpperCase()}1`;
+  batch.set(
+    doc(firestore, `paymentReferences/${referenceNumber}`),
+    {
+      normalizedReference: referenceNumber,
+      sourceType: "order_payment",
+      createdBy: "customer-1",
+      createdAt: serverTimestamp(),
+    },
+  );
   batch.set(
     paymentRecordRef(firestore, orderId),
     makeRecord(orderId, "customer-1", overrides.record),
@@ -143,7 +154,7 @@ async function submitFirst(firestore, orderId, overrides = {}) {
       orderId,
       1,
       "customer-1",
-      overrides.referenceNumber || "QR-REF-1",
+      referenceNumber,
       overrides.submission,
     ),
   );
@@ -152,6 +163,17 @@ async function submitFirst(firestore, orderId, overrides = {}) {
 
 async function submitNext(firestore, orderId, attemptNumber) {
   const batch = writeBatch(firestore);
+  const referenceNumber =
+    `QRREF${orderId.replace(/[^A-Z0-9]/gi, "").toUpperCase()}${attemptNumber}`;
+  batch.set(
+    doc(firestore, `paymentReferences/${referenceNumber}`),
+    {
+      normalizedReference: referenceNumber,
+      sourceType: "order_payment",
+      createdBy: "customer-1",
+      createdAt: serverTimestamp(),
+    },
+  );
   batch.update(paymentRecordRef(firestore, orderId), {
     paymentStatus: "pending_review",
     attemptCount: attemptNumber,
@@ -161,7 +183,7 @@ async function submitNext(firestore, orderId, attemptNumber) {
   });
   batch.set(
     submissionRef(firestore, orderId, attemptNumber),
-    makeSubmission(orderId, attemptNumber),
+    makeSubmission(orderId, attemptNumber, "customer-1", referenceNumber),
   );
   await batch.commit();
 }
@@ -186,20 +208,25 @@ async function adminReject(firestore, orderId, attemptNumber, reason) {
   await batch.commit();
 }
 
-async function adminVerify(firestore, orderId, attemptNumber) {
+async function adminVerify(
+  firestore,
+  orderId,
+  attemptNumber,
+  reviewerId = "admin-1",
+) {
   const batch = writeBatch(firestore);
   batch.update(paymentRecordRef(firestore, orderId), {
     paymentStatus: "paid",
     updatedAt: serverTimestamp(),
     verifiedAt: serverTimestamp(),
-    verifiedBy: "admin-1",
+    verifiedBy: reviewerId,
   });
   batch.update(
     submissionRef(firestore, orderId, attemptNumber),
     {
       status: "verified",
       reviewedAt: serverTimestamp(),
-      reviewedBy: "admin-1",
+      reviewedBy: reviewerId,
       rejectionReason: "",
     },
   );
@@ -346,12 +373,13 @@ describe("payment record rules", () => {
     );
   });
 
-  it("allows only the record owner and administrators to read records and submissions", async () => {
+  it("allows only the owner, admins, and staff to read records and submissions", async () => {
     const customerDb = testEnv.authenticatedContext("customer-1").firestore();
     const otherCustomerDb = testEnv
       .authenticatedContext("customer-2")
       .firestore();
     const adminDb = testEnv.authenticatedContext("admin-1").firestore();
+    const staffDb = testEnv.authenticatedContext("staff-1").firestore();
     await submitFirst(customerDb, "order-1");
 
     await assertSucceeds(getDoc(paymentRecordRef(customerDb, "order-1")));
@@ -364,6 +392,8 @@ describe("payment record rules", () => {
     );
     await assertSucceeds(getDoc(paymentRecordRef(adminDb, "order-1")));
     await assertSucceeds(getDoc(submissionRef(adminDb, "order-1", 1)));
+    await assertSucceeds(getDoc(paymentRecordRef(staffDb, "order-1")));
+    await assertSucceeds(getDoc(submissionRef(staffDb, "order-1", 1)));
   });
 
   it("allows only sequential retries after an administrator rejection", async () => {
@@ -388,7 +418,7 @@ describe("payment record rules", () => {
     assert.equal(record.data().currentSubmissionId, "attempt-2");
   });
 
-  it("allows admins to verify or reject, but blocks customer and non-admin transitions", async () => {
+  it("allows admins and staff to verify or reject, but blocks customer transitions", async () => {
     const customerDb = testEnv.authenticatedContext("customer-1").firestore();
     const adminDb = testEnv.authenticatedContext("admin-1").firestore();
     const staffDb = testEnv.authenticatedContext("staff-1").firestore();
@@ -409,27 +439,16 @@ describe("payment record rules", () => {
     });
     await assertDeniedWithoutRuleLimitError(customerBatch.commit());
 
-    const staffBatch = writeBatch(staffDb);
-    staffBatch.update(paymentRecordRef(staffDb, "order-1"), {
-      paymentStatus: "paid",
-      updatedAt: serverTimestamp(),
-      verifiedAt: serverTimestamp(),
-      verifiedBy: "staff-1",
-    });
-    staffBatch.update(submissionRef(staffDb, "order-1", 1), {
-      status: "verified",
-      reviewedAt: serverTimestamp(),
-      reviewedBy: "staff-1",
-      rejectionReason: "",
-    });
-    await assertDeniedWithoutRuleLimitError(staffBatch.commit());
-
-    await assertSucceeds(adminVerify(adminDb, "order-1", 1));
+    await assertSucceeds(adminVerify(staffDb, "order-1", 1, "staff-1"));
     assert.equal(
       (await getDoc(paymentRecordRef(customerDb, "order-1"))).data()
         .paymentStatus,
       "paid",
     );
+
+    await seedQrOrder("order-2");
+    await submitFirst(customerDb, "order-2");
+    await assertSucceeds(adminVerify(adminDb, "order-2", 1));
   });
 
   it("requires the record and submission to be reviewed atomically", async () => {

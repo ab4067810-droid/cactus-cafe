@@ -145,7 +145,7 @@ async function submitFirst(db, orderId, referenceNumber = "QR-REF-1", amountDue 
 }
 
 async function submitNext(db, orderId, attemptNumber, referenceNumber) {
-  const { record, submission } = paymentRefs(db, orderId, attemptNumber);
+  const { submission } = paymentRefs(db, orderId, attemptNumber);
   const batch = writeBatch(db);
   batch.update(paymentRefs(db, orderId).record, {
     paymentStatus: "pending_review",
@@ -497,7 +497,7 @@ describe("QR payment reference submission", () => {
     }
   });
 
-  it("denies non-admin and customer resolution attempts", async () => {
+  it("allows staff and denies customer resolution attempts", async () => {
     const { customerDb } = await prepareThirdRejection("resolve-auth");
     await seed("users/staff-1", { role: "staff" });
     const staffDb = testEnv.authenticatedContext("staff-1").firestore();
@@ -506,7 +506,7 @@ describe("QR payment reference submission", () => {
       verifiedBy: "staff-1",
     };
 
-    await assertFails(
+    await assertSucceeds(
       adminResolve(staffDb, "resolve-auth", "paid", paidFields),
     );
     await assertFails(

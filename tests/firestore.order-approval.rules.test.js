@@ -15,8 +15,12 @@ import {
   writeBatch,
 } from "firebase/firestore";
 
-import { approveOrderRequest } from "../src/services/orderApprovalService.js";
+import {
+  approveOrderRequest,
+  updateQrOrderPaymentStatus,
+} from "../src/services/orderApprovalService.js";
 import { getApprovalPricing } from "../src/utils/approvalPricing.js";
+import { getOrderApprovalPricing } from "../src/utils/deliveryFees.js";
 
 const projectId = "demo-cactus-cafe-order-approval";
 const rules = readFileSync(
@@ -27,19 +31,24 @@ const rules = readFileSync(
 let testEnv;
 
 function makeRequest(overrides = {}) {
-  return {
+  const request = {
     customerId: "customer-1",
     customerEmail: "customer@example.test",
     customerName: "Cafe Customer",
     phone: "09123456789",
     items: [{ id: "coffee", quantity: 2 }],
     orderType: "takeout",
-    address: "",
+    address: "12 Main Street, Barangay 1 Poblacion",
     notes: "Oat milk",
     status: "pending",
     createdAt: serverTimestamp(),
     ...overrides,
   };
+  if (request.orderType === "delivery") {
+    request.deliveryBarangay ||= "Barangay 1 Poblacion";
+    request.deliveryFee ??= 20;
+  }
+  return request;
 }
 
 function makeOrder(request, requestId, overrides = {}) {
@@ -50,6 +59,7 @@ function makeOrder(request, requestId, overrides = {}) {
     quantity,
     subtotal: 4 * quantity,
   }));
+  const itemsSubtotal = items.reduce((sum, item) => sum + item.subtotal, 0);
   return {
     requestId,
     customerId: request.customerId,
@@ -58,9 +68,24 @@ function makeOrder(request, requestId, overrides = {}) {
     phone: request.phone,
     orderType: request.orderType,
     address: request.address,
+    ...(request.orderType === "delivery"
+      ? {
+        deliveryBarangay: request.deliveryBarangay,
+        deliveryFee: request.deliveryFee,
+        itemsSubtotal,
+      }
+      : {}),
+    ...(Object.hasOwn(request, "deliveryLocation")
+      ? { deliveryLocation: request.deliveryLocation }
+      : {}),
     notes: request.notes,
     items,
-    total: items.reduce((sum, item) => sum + item.subtotal, 0),
+    total: itemsSubtotal + (
+      request.orderType === "delivery" ? request.deliveryFee : 0
+    ),
+    paymentMethod: "cash",
+    paymentTiming: "pay_later",
+    cashPaymentStatus: "unpaid",
     status: "Pending",
     createdAt: serverTimestamp(),
     ...overrides,
@@ -70,7 +95,11 @@ function makeOrder(request, requestId, overrides = {}) {
 function confirmedPricing(request, menuItems = {
   coffee: { name: "Coffee", price: 4, available: true },
 }) {
-  return getApprovalPricing(request, new Map(Object.entries(menuItems)));
+  return getOrderApprovalPricing(
+    request,
+    new Map(Object.entries(menuItems)),
+    getApprovalPricing,
+  );
 }
 
 async function seedApprovalState(menuItems = {
@@ -126,11 +155,37 @@ async function seedApprovalState(menuItems = {
 
 async function seedRequest(requestId, request) {
   await testEnv.withSecurityRulesDisabled(async (context) => {
-    await setDoc(
-      doc(context.firestore(), `orderRequests/${requestId}`),
-      request,
-    );
+    const firestore = context.firestore();
+    await Promise.all([
+      setDoc(doc(firestore, `orderRequests/${requestId}`), request),
+      setDoc(doc(firestore, `paymentSelections/${requestId}`), {
+        requestId,
+        customerId: request.customerId,
+        method: "cash",
+        timing: "pay_later",
+      }),
+    ]);
   });
+}
+
+async function createCustomerRequest(
+  database,
+  requestId,
+  request,
+  selectionOverrides = {},
+) {
+  const batch = writeBatch(database);
+  batch.set(doc(database, `orderRequests/${requestId}`), request);
+  batch.set(doc(database, `paymentSelections/${requestId}`), {
+    requestId,
+    customerId: request.customerId,
+    method: "cash",
+    timing: "pay_later",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    ...selectionOverrides,
+  });
+  await batch.commit();
 }
 
 async function assertDeniedWithoutRuleLimitError(operation) {
@@ -168,6 +223,7 @@ beforeEach(async () => {
       setDoc(doc(db, "users/customer-1"), { role: "customer" }),
       setDoc(doc(db, "users/customer-2"), { role: "customer" }),
       setDoc(doc(db, "users/admin-1"), { role: "admin" }),
+      setDoc(doc(db, "users/staff-1"), { role: "staff" }),
     ]);
   });
 });
@@ -207,9 +263,7 @@ describe("order approval rules", () => {
     const customerDb = testEnv
       .authenticatedContext("customer-1", { email: "customer@example.test" })
       .firestore();
-    await assertSucceeds(
-      setDoc(doc(customerDb, `orderRequests/${requestId}`), request),
-    );
+    await assertSucceeds(createCustomerRequest(customerDb, requestId, request));
 
     const adminDb = testEnv.authenticatedContext("admin-1").firestore();
     const result = await approveOrderRequest(
@@ -238,6 +292,64 @@ describe("order approval rules", () => {
     assert.equal(order.data().total, confirmedPricing(request).total);
   });
 
+  it("carries a submitted GCash reference and compressed receipt onto the order", async () => {
+    await seedApprovalState();
+    const requestId = "gcash-proof-request";
+    const request = makeRequest();
+    const paymentProofUrl = "data:image/jpeg;base64,SGVsbG8=";
+    const customerDb = testEnv
+      .authenticatedContext("customer-1", { email: "customer@example.test" })
+      .firestore();
+    await assertSucceeds(createCustomerRequest(
+      customerDb,
+      requestId,
+      request,
+      {
+        method: "qr",
+        timing: "advance",
+        paymentReference: "1234567890123",
+        paymentProofUrl,
+        paymentStatus: "pending_verification",
+      },
+    ));
+
+    const adminDb = testEnv.authenticatedContext("admin-1").firestore();
+    const result = await approveOrderRequest(
+      adminDb,
+      requestId,
+      "admin-1",
+      confirmedPricing(request),
+    );
+    const order = await getDoc(doc(adminDb, `orders/${requestId}`));
+
+    assert.equal(result.error, undefined);
+    assert.equal(order.data().paymentMethod, "qr");
+    assert.equal(order.data().paymentReference, "1234567890123");
+    assert.equal(order.data().paymentProofUrl, paymentProofUrl);
+    assert.equal(order.data().paymentStatus, "pending_verification");
+
+    const staffDb = testEnv.authenticatedContext("staff-1").firestore();
+    await updateQrOrderPaymentStatus(
+      staffDb,
+      requestId,
+      "staff-1",
+      "needs_review",
+    );
+    const needsReviewOrder = await getDoc(doc(staffDb, `orders/${requestId}`));
+    assert.equal(needsReviewOrder.data().paymentStatus, "needs_review");
+    assert.equal(needsReviewOrder.data().paymentStatusUpdatedBy, "staff-1");
+
+    await updateQrOrderPaymentStatus(
+      adminDb,
+      requestId,
+      "admin-1",
+      "paid",
+    );
+    const verifiedOrder = await getDoc(doc(adminDb, `orders/${requestId}`));
+    assert.equal(verifiedOrder.data().paymentStatus, "paid");
+    assert.equal(verifiedOrder.data().paymentStatusUpdatedBy, "admin-1");
+  });
+
   it("accepts and carries a delivery pin through request approval", async () => {
     await seedApprovalState();
     const requestId = "delivery-pin-request";
@@ -250,9 +362,7 @@ describe("order approval rules", () => {
     const customerDb = testEnv
       .authenticatedContext("customer-1", { email: "customer@example.test" })
       .firestore();
-    await assertSucceeds(
-      setDoc(doc(customerDb, `orderRequests/${requestId}`), request),
-    );
+    await assertSucceeds(createCustomerRequest(customerDb, requestId, request));
 
     const adminDb = testEnv.authenticatedContext("admin-1").firestore();
     const result = await approveOrderRequest(
@@ -278,7 +388,7 @@ describe("order approval rules", () => {
       deliveryLocation: null,
     });
     await assertSucceeds(
-      setDoc(doc(customerDb, "orderRequests/cleared-delivery-pin"), request),
+      createCustomerRequest(customerDb, "cleared-delivery-pin", request),
     );
 
     const adminDb = testEnv.authenticatedContext("admin-1").firestore();
@@ -336,9 +446,7 @@ describe("order approval rules", () => {
     const customerDb = testEnv
       .authenticatedContext("customer-1", { email: "customer@example.test" })
       .firestore();
-    await assertSucceeds(
-      setDoc(doc(customerDb, `orderRequests/${requestId}`), request),
-    );
+    await assertSucceeds(createCustomerRequest(customerDb, requestId, request));
 
     const adminDb = testEnv.authenticatedContext("admin-1").firestore();
     const result = await approveOrderRequest(
@@ -381,9 +489,7 @@ describe("order approval rules", () => {
     const customerDb = testEnv
       .authenticatedContext("customer-1", { email: "customer@example.test" })
       .firestore();
-    await assertSucceeds(
-      setDoc(doc(customerDb, `orderRequests/${requestId}`), request),
-    );
+    await assertSucceeds(createCustomerRequest(customerDb, requestId, request));
 
     const adminDb = testEnv.authenticatedContext("admin-1").firestore();
     const confirmation = confirmedPricing(request, {
@@ -424,9 +530,7 @@ describe("order approval rules", () => {
     const customerDb = testEnv
       .authenticatedContext("customer-1", { email: "customer@example.test" })
       .firestore();
-    await assertSucceeds(
-      setDoc(doc(customerDb, `orderRequests/${requestId}`), request),
-    );
+    await assertSucceeds(createCustomerRequest(customerDb, requestId, request));
 
     const approval = writeBatch(customerDb);
     approval.update(doc(customerDb, `orderRequests/${requestId}`), {
@@ -519,9 +623,7 @@ describe("order approval rules", () => {
     const customerDb = testEnv
       .authenticatedContext("customer-1", { email: "customer@example.test" })
       .firestore();
-    await assertSucceeds(
-      setDoc(doc(customerDb, `orderRequests/${requestId}`), request),
-    );
+    await assertSucceeds(createCustomerRequest(customerDb, requestId, request));
 
     const adminDb = testEnv.authenticatedContext("admin-1").firestore();
     const batch = writeBatch(adminDb);

@@ -96,9 +96,10 @@ function PrivacyPolicy() {
                 account identifiers and contact details, order and delivery
                 details, reservation details, saved menu item IDs, review
                 content, and payment selections and reservation payment
-                references. Information is collected when you create or use an
-                account, save a favorite, submit an order or reservation, or
-                submit a review.
+                references. Profile Age is optional; you do not need to provide
+                it to place an order. Information is collected when you create
+                or use an account, save a favorite, submit an order or
+                reservation, or submit a review.
               </p>
               <p>
                 Order and reservation notifications may contain your account
@@ -120,8 +121,10 @@ function PrivacyPolicy() {
               </p>
               <p>
                 Customers can save a phone number and structured delivery
-                address in their account profile. The application does not
-                write account passwords into the Firestore profile.
+                address in their account profile. Age may be included as an
+                optional profile detail if you choose to provide it; it is not
+                required for checkout. The application does not write account
+                passwords into the Firestore profile.
               </p>
             </section>
 
@@ -138,6 +141,16 @@ function PrivacyPolicy() {
                 When an administrator approves a request, the resulting order
                 also stores priced order items, the total, order status, and
                 customer/order details needed to prepare and fulfill it.
+              </p>
+              <p>
+                A Proof of Delivery photo may be taken to document a completed
+                handoff or help resolve a delivery question. It should be
+                limited to what is needed to show the order delivery and
+                should not intentionally include unrelated people or
+                sensitive details. Staff may save a secure photo URL, the
+                recording time, and their staff account ID with the delivery
+                order in Firestore. The image itself remains hosted by the
+                service providing that URL and is not uploaded by this website.
               </p>
             </section>
 
@@ -169,10 +182,14 @@ function PrivacyPolicy() {
             <section id="payments" className="legal-section">
               <h2>6. Payment-related information</h2>
               <p>
-                Checkout records the selected payment method (Cash or generic
-                QR Payment), payment timing (Advance Payment or Pay Later),
-                customer and request identifiers, and timestamps. Approved
-                orders store order totals and priced items.
+                Checkout records the selected payment method (Cash or QR
+                Payment), payment timing (Advance Payment or Pay Later),
+                customer and request identifiers, and timestamps. Dine-in
+                Cash is the default unpaid-at-counter option; optional QR
+                payment is pending verification until reviewed. For Takeout
+                and Delivery, Cash is available below ₱500, while orders of
+                ₱500 or more require upfront QR payment. Approved orders store
+                order totals and priced items.
               </p>
               <p>
                 Reservation submissions include a per-guest fee, the selected
@@ -192,9 +209,10 @@ function PrivacyPolicy() {
                 maintain customer profiles, receive and review order requests,
                 arrange pickup or delivery, handle reservations, moderate and
                 display approved reviews, and send order or reservation
-                notifications. Information may also be used to respond to
-                customer inquiries and operate or protect the service, subject
-                to applicable law.
+                notifications. A Proof of Delivery photo, if taken, may be
+                used to confirm a handoff or resolve a delivery issue.
+                Information may also be used to respond to customer inquiries
+                and operate or protect the service, subject to applicable law.
               </p>
             </section>
 
@@ -207,7 +225,10 @@ function PrivacyPolicy() {
                 and their payment references, reviews, and notifications.
                 Firebase is a Google service provider. The application’s code
                 does not establish a separate payment processor or payment
-                screenshot storage workflow.
+                screenshot storage workflow. For Proof of Delivery, the
+                website stores a staff-provided HTTPS photo URL and audit
+                details on the delivery order; it does not upload or host the
+                photo file using Firebase Storage.
               </p>
               <p>
                 Storage locations, service terms, and any cross-border
@@ -226,7 +247,10 @@ function PrivacyPolicy() {
                 reviews, and customer accounts. Google/Firebase processes
                 information to provide authentication and database services.
                 Approved review content is made publicly available as
-                described above.
+                described above. Authorized café staff can view a recorded
+                Proof of Delivery link in the order workflow. The external
+                image host may receive a request when its link is opened or
+                previewed.
               </p>
               <p>
                 The inspected application does not show an integration with a
@@ -242,7 +266,10 @@ function PrivacyPolicy() {
                 Account and profile information is retained while your account
                 remains active. Order and reservation records are retained only
                 for as long as needed to fulfill your requests, meet accounting
-                or other legal obligations, and resolve disputes.
+                or other legal obligations, and resolve disputes. Any Proof of
+                Delivery photo held by the café should be retained only as
+                long as needed to confirm delivery or address a related issue,
+                subject to applicable legal requirements.
               </p>
               <p>
                 You may request deletion by contacting the Privacy Contact /

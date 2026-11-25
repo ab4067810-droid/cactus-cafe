@@ -1,13 +1,26 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 
+import AdminWorkspaceNavigation from "../components/AdminWorkspaceNavigation";
+import AdminLoadingSkeleton from "../components/AdminLoadingSkeleton";
 import { useAuth } from "../context/Authcontext";
 import { logout } from "../services/authService";
+import { normalizeOrderStatus } from "../utils/orderStatus.js";
 import {
   loadAdminQrVerificationQueue,
   loadAdminQrResolutionQueue,
+  loadAdminCashPaymentOrders,
+  loadAdminTransactionHistory,
+  markCashOrderPaid,
   reviewQrPaymentSubmission,
   resolveAdminQrPaymentRecord,
+  updateAdminQrOrderPaymentStatus,
 } from "../services/paymentRecordService";
 import "../styles/AdminPayments.css";
 import "../styles/AdminSidebar.css";
@@ -20,54 +33,7 @@ const paymentSections = [
   { id: "history", label: "Transaction History", icon: "↗" },
 ];
 
-const overviewCards = [
-  {
-    label: "Total Collected",
-    value: "₱24,680.00",
-    detail: "Sample total · this month",
-    icon: "₱",
-    tone: "green",
-  },
-  {
-    label: "Unpaid Orders",
-    value: "08",
-    detail: "Sample outstanding orders",
-    icon: "◷",
-    tone: "amber",
-  },
-  {
-    label: "Pending QR Verification",
-    value: "03",
-    detail: "Sample receipts to review",
-    icon: "▧",
-    tone: "blue",
-  },
-  {
-    label: "Pending Refund Requests",
-    value: "02",
-    detail: "Sample requests to review",
-    icon: "↩",
-    tone: "rose",
-  },
-];
-
-const demoRecords = {
-  cash: [
-    {
-      id: "ORD-4D8A12",
-      customer: "Eli Garcia",
-      amount: "₱350.00",
-      submitted: "Today, 11:06 AM",
-      status: "Collected",
-    },
-    {
-      id: "ORD-9B341C",
-      customer: "Ana Flores",
-      amount: "₱790.00",
-      submitted: "Today, 8:54 AM",
-      status: "Pay later",
-    },
-  ],
+const prototypeRecords = {
   refunds: [
     {
       id: "RFD-0148",
@@ -84,29 +50,36 @@ const demoRecords = {
       status: "Pending review",
     },
   ],
-  history: [
-    {
-      id: "ORD-4D8A12",
-      customer: "Eli Garcia",
-      amount: "₱350.00",
-      submitted: "Today, 11:06 AM",
-      status: "Cash received",
-    },
-    {
-      id: "ORD-76F02D",
-      customer: "Sam Rivera",
-      amount: "₱540.00",
-      submitted: "Today, 10:22 AM",
-      status: "QR verified",
-    },
-    {
-      id: "RFD-0146",
-      customer: "Bea Navarro",
-      amount: "₱125.00",
-      submitted: "Yesterday, 5:48 PM",
-      status: "Refund issued",
-    },
-  ],
+};
+
+const historyFilters = [
+  { id: "all", label: "All" },
+  { id: "qr", label: "GCash QR" },
+  { id: "cash", label: "Cash" },
+  { id: "paid", label: "Paid" },
+  { id: "attention", label: "Needs Attention" },
+];
+
+const isTransactionNeedsAttention = (transaction) =>
+  transaction.paymentStatus !== "paid";
+
+const transactionStatusLabels = {
+  admin_review_required: "Admin review required",
+  needs_review: "Needs review",
+  paid: "Paid",
+  pending_review: "Pending review",
+  pending_verification: "Pending verification",
+  rejected: "Rejected",
+  unpaid: "Unpaid",
+};
+
+const getTransactionStatusLabel = (status) =>
+  transactionStatusLabels[status] || status || "Unknown";
+
+const getTransactionStatusTone = (transaction) => {
+  if (transaction.paymentStatus === "paid") return "is-paid";
+  if (isTransactionNeedsAttention(transaction)) return "is-attention";
+  return "is-pending";
 };
 
 const formatPaymentAmount = (amountDue) =>
@@ -115,6 +88,12 @@ const formatPaymentAmount = (amountDue) =>
     currency: "PHP",
   }).format((Number(amountDue) || 0) / 100);
 
+const formatPeso = (amount) =>
+  new Intl.NumberFormat("en-PH", {
+    style: "currency",
+    currency: "PHP",
+  }).format(Number(amount) || 0);
+
 const formatPaymentDate = (timestamp) => {
   if (!timestamp?.toDate) return "Date unavailable";
   return timestamp.toDate().toLocaleString("en-PH", {
@@ -122,6 +101,165 @@ const formatPaymentDate = (timestamp) => {
     timeStyle: "short",
   });
 };
+
+function CheckoutQrEvidence({
+  entry,
+  copyFeedback,
+  onCopyReference,
+  onOpenReceipt,
+}) {
+  const feedbackForEntry = copyFeedback?.orderId === entry.orderId
+    ? copyFeedback
+    : null;
+
+  return (
+    <section className="payments-checkout-evidence" aria-label="Checkout QR payment evidence">
+      <div>
+        <span className="payments-evidence-label">
+          13-digit GCash Reference Number
+        </span>
+        {entry.paymentReference ? (
+          <div className="payments-reference-row">
+            <code>{entry.paymentReference}</code>
+            <button
+              type="button"
+              className="payments-copy-button"
+              onClick={() => onCopyReference(entry)}
+              aria-label={
+                feedbackForEntry?.copied
+                  ? "GCash reference copied"
+                  : `Copy GCash reference ${entry.paymentReference}`
+              }
+            >
+              {feedbackForEntry?.copied ? "Copied!" : "Copy"}
+            </button>
+          </div>
+        ) : (
+          <p className="payments-missing-evidence">Reference number unavailable.</p>
+        )}
+        {feedbackForEntry && (
+          <span className="payments-copy-feedback" role="status">
+            {feedbackForEntry.message}
+          </span>
+        )}
+      </div>
+      <div>
+        <span className="payments-evidence-label">Receipt Screenshot</span>
+        {entry.paymentProofUrl ? (
+          <button
+            type="button"
+            className="payments-receipt-preview"
+            onClick={() => onOpenReceipt({
+              orderId: entry.orderId,
+              reference: entry.paymentReference,
+              total: entry.orderTotal,
+              url: entry.paymentProofUrl,
+            })}
+            aria-label={`Enlarge receipt screenshot for order ${entry.orderId}`}
+          >
+            <img
+              src={entry.paymentProofUrl}
+              alt={`Uploaded GCash receipt for order ${entry.orderId}`}
+            />
+            <span>Enlarge receipt</span>
+          </button>
+        ) : (
+          <p className="payments-missing-evidence">Receipt screenshot unavailable.</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function TransactionHistoryCard({
+  transaction,
+  copyFeedback,
+  onCopyReference,
+  onOpenReceipt,
+}) {
+  const feedbackForEntry = copyFeedback?.orderId === transaction.orderId
+    ? copyFeedback
+    : null;
+  const isQr = transaction.kind === "qr";
+
+  return (
+    <article className="payments-history-card">
+      <header className="payments-history-card-header">
+        <div>
+          <span className="payments-qr-overline">ORDER ID</span>
+          <h4>{transaction.orderId}</h4>
+        </div>
+        <span
+          className={`payments-status payments-history-status ${
+            getTransactionStatusTone(transaction)
+          }`}
+        >
+          <span />
+          {getTransactionStatusLabel(transaction.paymentStatus)}
+        </span>
+      </header>
+      <dl className="payments-history-details">
+        <div>
+          <dt>Customer</dt>
+          <dd>{transaction.customerName || "Customer name unavailable"}</dd>
+        </div>
+        <div>
+          <dt>Order type</dt>
+          <dd>{transaction.orderType || "Unavailable"}</dd>
+        </div>
+        <div>
+          <dt>Transaction date</dt>
+          <dd>{formatPaymentDate(transaction.timestamp)}</dd>
+        </div>
+        <div>
+          <dt>{isQr ? "Order total" : "Total due"}</dt>
+          <dd>{formatPeso(transaction.total)}</dd>
+        </div>
+        <div>
+          <dt>Payment method</dt>
+          <dd>{isQr ? "GCash QR" : "Cash"}</dd>
+        </div>
+      </dl>
+      {isQr && transaction.paymentReference && (
+        <div className="payments-history-reference">
+          <span>13-digit GCash Reference Number</span>
+          <code>{transaction.paymentReference}</code>
+          <button
+            type="button"
+            className="payments-copy-button"
+            onClick={() => onCopyReference(transaction)}
+            aria-label={
+              feedbackForEntry?.copied
+                ? "GCash reference copied"
+                : `Copy GCash reference ${transaction.paymentReference}`
+            }
+          >
+            {feedbackForEntry?.copied ? "Copied!" : "Copy"}
+          </button>
+          {feedbackForEntry && (
+            <span className="payments-copy-feedback" role="status">
+              {feedbackForEntry.message}
+            </span>
+          )}
+        </div>
+      )}
+      {isQr && transaction.paymentProofUrl && (
+        <button
+          type="button"
+          className="payments-history-receipt-button"
+          onClick={() => onOpenReceipt({
+            orderId: transaction.orderId,
+            reference: transaction.paymentReference,
+            total: transaction.total,
+            url: transaction.paymentProofUrl,
+          })}
+        >
+          View receipt
+        </button>
+      )}
+    </article>
+  );
+}
 
 function AdminPayments() {
   const navigate = useNavigate();
@@ -133,6 +271,16 @@ function AdminPayments() {
   const [qrQueueLoading, setQrQueueLoading] = useState(true);
   const [qrQueueError, setQrQueueError] = useState("");
   const [resolutionQueue, setResolutionQueue] = useState([]);
+  const [cashOrders, setCashOrders] = useState([]);
+  const [cashQueueLoading, setCashQueueLoading] = useState(true);
+  const [cashQueueError, setCashQueueError] = useState("");
+  const [cashPaymentFeedback, setCashPaymentFeedback] = useState("");
+  const [markingCashOrderId, setMarkingCashOrderId] = useState(null);
+  const [transactionHistory, setTransactionHistory] = useState([]);
+  const [transactionHistoryLoading, setTransactionHistoryLoading] = useState(true);
+  const [transactionHistoryError, setTransactionHistoryError] = useState("");
+  const [historyFilter, setHistoryFilter] = useState("all");
+  const [historySearch, setHistorySearch] = useState("");
   const [resolutionQueueLoading, setResolutionQueueLoading] = useState(true);
   const [resolutionQueueError, setResolutionQueueError] = useState("");
   const [reviewReasons, setReviewReasons] = useState({});
@@ -148,6 +296,20 @@ function AdminPayments() {
   const [resolutionNotice, setResolutionNotice] = useState(null);
   const [resolvingIds, setResolvingIds] = useState(new Set());
   const resolvingIdsRef = useRef(new Set());
+  const receiptDialogRef = useRef(null);
+  const [receiptPreview, setReceiptPreview] = useState(null);
+  const [copyFeedback, setCopyFeedback] = useState(null);
+
+  useEffect(() => {
+    const dialog = receiptDialogRef.current;
+    if (!dialog) return;
+
+    if (receiptPreview && !dialog.open) {
+      dialog.showModal();
+    } else if (!receiptPreview && dialog.open) {
+      dialog.close();
+    }
+  }, [receiptPreview]);
 
   const loadQrQueue = useCallback(async (adminId) => {
     try {
@@ -183,18 +345,168 @@ function AdminPayments() {
     }
   }, []);
 
+  const loadCashQueue = useCallback(async (adminId) => {
+    try {
+      setCashQueueLoading(true);
+      setCashQueueError("");
+      setCashOrders(await loadAdminCashPaymentOrders(adminId));
+      return true;
+    } catch (queueError) {
+      console.error("Error loading cash payment records:", queueError);
+      setCashQueueError("Unable to load cash payment records. Please refresh.");
+      return false;
+    } finally {
+      setCashQueueLoading(false);
+    }
+  }, []);
+
+  const loadTransactionHistory = useCallback(async (adminId) => {
+    try {
+      setTransactionHistoryLoading(true);
+      setTransactionHistoryError("");
+      setTransactionHistory(await loadAdminTransactionHistory(adminId));
+      return true;
+    } catch (historyError) {
+      console.error("Error loading transaction history:", historyError);
+      setTransactionHistoryError(
+        "Unable to load transaction history. Please refresh and try again.",
+      );
+      return false;
+    } finally {
+      setTransactionHistoryLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    if (!loading && (!user || role !== "admin")) {
-      navigate(user ? "/customer" : "/login", { replace: true });
+    if (!loading && (!user || !["admin", "staff"].includes(role))) {
+      navigate(
+        user && role === "customer" ? "/menu" : "/login",
+        { replace: true },
+      );
     }
   }, [loading, navigate, role, user]);
 
   useEffect(() => {
-    if (!loading && user && role === "admin") {
+    if (!loading && user && ["admin", "staff"].includes(role)) {
       loadQrQueue(user.uid);
       loadResolutionQueue(user.uid);
+      loadCashQueue(user.uid);
+      loadTransactionHistory(user.uid);
     }
-  }, [loadQrQueue, loadResolutionQueue, loading, role, user]);
+  }, [
+    loadCashQueue,
+    loadQrQueue,
+    loadResolutionQueue,
+    loadTransactionHistory,
+    loading,
+    role,
+    user,
+  ]);
+
+  const handleMarkCashPaid = async (order) => {
+    if (markingCashOrderId) return;
+    setMarkingCashOrderId(order.id);
+    setCashPaymentFeedback("");
+    try {
+      await markCashOrderPaid({ orderId: order.id, adminId: user.uid });
+      setCashPaymentFeedback(`Cash payment for order ${order.id} was recorded.`);
+      await loadCashQueue(user.uid);
+    } catch (paymentError) {
+      console.error("Unable to record cash payment:", paymentError);
+      setCashPaymentFeedback(
+        paymentError instanceof Error
+          ? paymentError.message
+          : "Unable to record this cash payment. Refresh the queue and try again.",
+      );
+    } finally {
+      setMarkingCashOrderId(null);
+    }
+  };
+
+  const handleCopyReference = async (entry) => {
+    try {
+      await navigator.clipboard.writeText(entry.paymentReference);
+      setCopyFeedback({
+        orderId: entry.orderId,
+        message: "GCash reference copied.",
+        copied: true,
+      });
+    } catch (copyError) {
+      console.error("Unable to copy GCash reference:", copyError);
+      setCopyFeedback({
+        orderId: entry.orderId,
+        message: "Unable to copy. Select the reference number manually.",
+        copied: false,
+      });
+    }
+  };
+
+  const handleCheckoutPaymentDecision = async (entry, paymentStatus) => {
+    const actionId = `${entry.orderId}/checkout`;
+    if (reviewingIdsRef.current.has(actionId)) return;
+
+    if (
+      paymentStatus === "paid"
+      && !externalVerification[actionId]
+    ) {
+      setReviewFeedback((current) => ({
+        ...current,
+        [actionId]: {
+          type: "error",
+          message: "Confirm the transaction was verified externally first.",
+        },
+      }));
+      return;
+    }
+
+    reviewingIdsRef.current.add(actionId);
+    setReviewingIds(new Set(reviewingIdsRef.current));
+    setReviewFeedback((current) => ({
+      ...current,
+      [actionId]: null,
+    }));
+
+    try {
+      await updateAdminQrOrderPaymentStatus({
+        orderId: entry.orderId,
+        adminId: user.uid,
+        paymentStatus,
+      });
+      setExternalVerification((current) => ({
+        ...current,
+        [actionId]: false,
+      }));
+      setReviewNotice({
+        type: "success",
+        message: `Order ${entry.orderId} payment status was updated to ${paymentStatus}.`,
+      });
+
+      const [qrRefreshed, resolutionRefreshed] = await Promise.all([
+        loadQrQueue(user.uid),
+        loadResolutionQueue(user.uid),
+      ]);
+      if (!qrRefreshed || !resolutionRefreshed) {
+        setReviewNotice({
+          type: "error",
+          message: "The payment status was saved, but a queue could not refresh.",
+        });
+      }
+    } catch (reviewError) {
+      console.error("Unable to update checkout QR payment:", reviewError);
+      setReviewFeedback((current) => ({
+        ...current,
+        [actionId]: {
+          type: "error",
+          message: reviewError instanceof Error
+            ? reviewError.message
+            : "Unable to update this payment. Refresh the queue and try again.",
+        },
+      }));
+    } finally {
+      reviewingIdsRef.current.delete(actionId);
+      setReviewingIds(new Set(reviewingIdsRef.current));
+    }
+  };
 
   const handleReviewDecision = async (entry, decision) => {
     const actionId = `${entry.orderId}/${entry.submission.id}`;
@@ -286,6 +598,23 @@ function AdminPayments() {
   const handleStartResolution = (entry, decision) => {
     const reason = resolutionReasons[entry.orderId] || "";
     if (
+      entry.source === "checkout"
+      && decision === "paid"
+      && (
+        !/^\d{13}$/.test(entry.paymentReference || "")
+        || !entry.paymentProofUrl
+      )
+    ) {
+      setResolutionFeedback((current) => ({
+        ...current,
+        [entry.orderId]: {
+          type: "error",
+          message: "A 13-digit GCash reference and receipt are required before marking payment paid.",
+        },
+      }));
+      return;
+    }
+    if (
       decision === "paid"
       && !resolutionVerification[entry.orderId]
     ) {
@@ -300,6 +629,7 @@ function AdminPayments() {
     }
     if (
       decision === "rejected"
+      && entry.source !== "checkout"
       && (
         !reason.trim()
         || Array.from(reason.trim()).length > 500
@@ -339,7 +669,11 @@ function AdminPayments() {
 
     const reason = resolutionReasons[orderId] || "";
     if (decision === "paid" && !resolutionVerification[orderId]) return;
-    if (decision === "rejected" && !reason.trim()) return;
+    if (
+      decision === "rejected"
+      && entry.source !== "checkout"
+      && !reason.trim()
+    ) return;
 
     resolvingIdsRef.current.add(orderId);
     setResolvingIds(new Set(resolvingIdsRef.current));
@@ -349,12 +683,20 @@ function AdminPayments() {
     }));
 
     try {
-      await resolveAdminQrPaymentRecord({
-        orderId,
-        adminId: user.uid,
-        decision,
-        resolutionReason: reason,
-      });
+      if (entry.source === "checkout") {
+        await updateAdminQrOrderPaymentStatus({
+          orderId,
+          adminId: user.uid,
+          paymentStatus: decision,
+        });
+      } else {
+        await resolveAdminQrPaymentRecord({
+          orderId,
+          adminId: user.uid,
+          decision,
+          resolutionReason: reason,
+        });
+      }
       setResolutionReasons((current) => ({
         ...current,
         [orderId]: "",
@@ -374,8 +716,11 @@ function AdminPayments() {
           : `Payment for order ${orderId} was finally rejected.`,
       });
 
-      const refreshed = await loadResolutionQueue(user.uid);
-      if (!refreshed) {
+      const refreshResults = await Promise.all([
+        loadQrQueue(user.uid),
+        loadResolutionQueue(user.uid),
+      ]);
+      if (refreshResults.some((refreshed) => !refreshed)) {
         setResolutionNotice({
           type: "error",
           message: "The resolution was saved, but the queue could not refresh.",
@@ -411,14 +756,68 @@ function AdminPayments() {
     }
   };
 
-  if (loading || !user || role !== "admin") {
-    return (
-      <main className="admin-payments-page">
-        <div className="admin-payments-loading" role="status">
-          Preparing payment workspace...
-        </div>
-      </main>
+  const filteredTransactionHistory = useMemo(() => {
+    const search = historySearch.trim().toLocaleLowerCase();
+    return transactionHistory.filter((transaction) => {
+      const matchesFilter = historyFilter === "all"
+        || (historyFilter === "qr" && transaction.kind === "qr")
+        || (historyFilter === "cash" && transaction.kind === "cash")
+        || (historyFilter === "paid" && transaction.paymentStatus === "paid")
+        || (
+          historyFilter === "attention"
+          && isTransactionNeedsAttention(transaction)
+        );
+      if (!matchesFilter) return false;
+      if (!search) return true;
+
+      return [
+        transaction.orderId,
+        transaction.customerName,
+        transaction.paymentReference,
+      ]
+        .some((value) => String(value || "").toLocaleLowerCase().includes(search));
+    });
+  }, [historyFilter, historySearch, transactionHistory]);
+
+  const collectedTotal = useMemo(
+    () => transactionHistory.reduce(
+      (total, transaction) => (
+        transaction.paymentStatus === "paid"
+          ? total + (Number(transaction.total) || 0)
+          : total
+      ),
+      0,
+    ),
+    [transactionHistory],
+  );
+  const unpaidOrderCount = useMemo(() => {
+    const unpaidOrderIds = new Set(
+      cashOrders
+        .filter((order) => (
+          order.cashPaymentStatus !== "paid"
+          && normalizeOrderStatus(order.status) !== "Cancelled"
+        ))
+        .map((order) => order.id),
     );
+
+    transactionHistory.forEach((transaction) => {
+      if (
+        transaction.source === "order"
+        && transaction.kind === "qr"
+        && transaction.paymentStatus !== "paid"
+      ) {
+        unpaidOrderIds.add(transaction.orderId);
+      }
+    });
+    [...qrQueue, ...resolutionQueue].forEach((payment) => {
+      if (payment.orderId) unpaidOrderIds.add(payment.orderId);
+    });
+
+    return unpaidOrderIds.size;
+  }, [cashOrders, qrQueue, resolutionQueue, transactionHistory]);
+
+  if (!loading && (!user || !["admin", "staff"].includes(role))) {
+    return null;
   }
 
   const activeTab = paymentSections.find(
@@ -426,8 +825,55 @@ function AdminPayments() {
   );
   const isQrSection = activeSection === "qr";
   const isResolutionSection = activeSection === "qr-resolution";
-  const isLiveSection = isQrSection || isResolutionSection;
-  const records = isLiveSection ? [] : demoRecords[activeSection] || [];
+  const isCashSection = activeSection === "cash";
+  const isHistorySection = activeSection === "history";
+  const isLiveSection =
+    isQrSection || isResolutionSection || isCashSection || isHistorySection;
+  const records = isLiveSection ? [] : prototypeRecords[activeSection] || [];
+  const overviewCards = [
+    {
+      label: "Total Collected",
+      value: transactionHistoryError ? "—" : formatPeso(collectedTotal),
+      detail: transactionHistoryError
+        ? "Live total unavailable"
+        : "Paid QR/cash + legacy payment records",
+      loading: transactionHistoryLoading,
+      icon: "₱",
+      tone: "green",
+    },
+    {
+      label: "Unpaid Orders",
+      value: cashQueueError
+        || transactionHistoryError
+        || qrQueueError
+        || resolutionQueueError
+        ? "—"
+        : unpaidOrderCount,
+      detail: cashQueueError
+        || transactionHistoryError
+        || qrQueueError
+        || resolutionQueueError
+        ? "Live count unavailable"
+        : "Approved orders still awaiting payment",
+      loading:
+        cashQueueLoading
+        || transactionHistoryLoading
+        || qrQueueLoading
+        || resolutionQueueLoading,
+      icon: "◷",
+      tone: "amber",
+    },
+    {
+      label: "Pending QR Verification",
+      value: qrQueueError ? "—" : qrQueue.length,
+      detail: qrQueueError
+        ? "Live queue unavailable"
+        : "Live payments awaiting review",
+      loading: qrQueueLoading,
+      icon: "▧",
+      tone: "blue",
+    },
+  ];
 
   return (
     <main className="admin-payments-page">
@@ -449,85 +895,19 @@ function AdminPayments() {
           className="payments-brand"
           onClick={() => setMobileNavigationOpen(false)}
         >
-          <span className="payments-brand-mark" aria-hidden="true">🌵</span>
+          <span className="payments-brand-mark" aria-hidden="true">C</span>
           <span>
             <strong>Cactus Café</strong>
-            <small>ADMIN WORKSPACE</small>
+            <small>STAFF WORKSPACE</small>
           </span>
         </NavLink>
 
         <div className="payments-sidebar-label">WORKSPACE</div>
         <nav className="payments-nav">
-          <NavLink
-            to="/admin/menu"
-            className={({ isActive }) =>
-              `payments-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="payments-nav-icon" aria-hidden="true">▦</span>
-            <span>Menu Management</span>
-          </NavLink>
-          <NavLink
-            to="/admin/orders"
-            className={({ isActive }) =>
-              `payments-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="payments-nav-icon" aria-hidden="true">↗</span>
-            <span>Orders</span>
-          </NavLink>
-          <NavLink
-            to="/admin/payments"
-            className={({ isActive }) =>
-              `payments-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="payments-nav-icon" aria-hidden="true">₱</span>
-            <span>Payment Management</span>
-          </NavLink>
-          <NavLink
-            to="/admin/reservations"
-            className={({ isActive }) =>
-              `payments-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="payments-nav-icon" aria-hidden="true">◷</span>
-            <span>Reservations</span>
-          </NavLink>
-          <NavLink
-            to="/admin/reviews"
-            className={({ isActive }) =>
-              `payments-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="payments-nav-icon" aria-hidden="true">☆</span>
-            <span>Reviews</span>
-          </NavLink>
-          <NavLink
-            to="/admin/users"
-            className={({ isActive }) =>
-              `payments-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="payments-nav-icon" aria-hidden="true">◎</span>
-            <span>Customers &amp; Security</span>
-          </NavLink>
-          <NavLink
-            to="/admin/monthly-records"
-            className={({ isActive }) =>
-              `payments-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="payments-nav-icon" aria-hidden="true">▤</span>
-            <span>Monthly Records</span>
-          </NavLink>
+          <AdminWorkspaceNavigation
+            classPrefix="payments"
+            onNavigate={() => setMobileNavigationOpen(false)}
+          />
         </nav>
 
         <div className="payments-sidebar-footer">
@@ -573,13 +953,21 @@ function AdminPayments() {
           </header>
 
           <div className="payments-content">
+            {loading ? (
+              <AdminLoadingSkeleton
+                label="Loading payment workspace"
+                stats={4}
+                rows={5}
+              />
+            ) : (
+              <>
             <section className="payments-heading">
               <div>
                 <p className="payments-eyebrow">FINANCE OVERVIEW</p>
                 <h1>Payment Management</h1>
                 <p className="payments-intro">
                   Review payment activity, verify QR submissions, and manage
-                  refund requests in one place.
+                  prototype refund examples in one place.
                 </p>
               </div>
               <span
@@ -590,7 +978,11 @@ function AdminPayments() {
                   ? "Live QR queue"
                   : isResolutionSection
                     ? "Live resolution queue"
-                    : "Prototype data"}
+                    : isCashSection
+                      ? "Live cash records"
+                      : isHistorySection
+                        ? "Live transaction history"
+                      : "Prototype data"}
               </span>
             </section>
 
@@ -603,15 +995,17 @@ function AdminPayments() {
                 {isQrSection
                   ? "QR submissions below are loaded from Firestore. Verify transactions externally before marking them paid."
                   : isResolutionSection
-                    ? "These third-rejection records can only be resolved by an administrator. Verify transactions externally before resolving a record as paid."
-                    : "Cash Payment Records, Refund Management, and Transaction History are prototype-only sample data and are not connected to Firestore."}
+                    ? "Checkout mismatches and legacy third-rejection records can be resolved here. Verify transactions externally before marking one paid."
+                    : isCashSection
+                      ? "Cash payments are recorded against approved Cash orders. Mark an order paid only after collecting the full amount due."
+                      : isHistorySection
+                        ? "Approved GCash QR and Cash orders, plus standalone legacy payment records, are loaded from Firestore."
+                      : "Refund Management is prototype-only sample data and is not connected to Firestore."}
               </p>
             </div>
 
             <section className="payments-overview" aria-label="Payment overview">
-              {overviewCards.map((card) => {
-                const isQrCount = card.label === "Pending QR Verification";
-                return (
+              {overviewCards.map((card) => (
                   <article
                     className={`payments-stat-card tone-${card.tone}`}
                     key={card.label}
@@ -623,18 +1017,17 @@ function AdminPayments() {
                       </span>
                     </div>
                     <strong className="payments-stat-value">
-                      {isQrCount ? qrQueue.length : card.value}
+                      {card.loading ? (
+                        <span className="admin-skeleton-shape admin-skeleton-value" aria-hidden="true" />
+                      ) : card.value}
                     </strong>
                     <span className="payments-stat-detail">
-                      {isQrCount
-                        ? qrQueueLoading
-                          ? "Loading live submissions"
-                          : "Live submissions awaiting review"
+                      {card.loading
+                        ? <span className="admin-skeleton-shape admin-skeleton-label" aria-hidden="true" />
                         : card.detail}
                     </span>
                   </article>
-                );
-              })}
+              ))}
             </section>
 
             <section className="payments-workspace">
@@ -650,6 +1043,10 @@ function AdminPayments() {
                     ? "Live Firestore queue"
                     : isResolutionSection
                       ? "Live admin-resolution queue"
+                      : isCashSection
+                        ? "Live cash payment records"
+                        : isHistorySection
+                          ? "Live Firestore transaction history"
                       : "Prototype records"}
                 </span>
               </div>
@@ -688,9 +1085,13 @@ function AdminPayments() {
                     <h3>{activeTab?.label}</h3>
                     <p>
                       {isQrSection
-                        ? "Only submissions awaiting administrator review are shown."
+                        ? "Checkout QR orders and legacy payment submissions awaiting review are shown."
                         : isResolutionSection
-                          ? "Only records requiring final resolution after three rejections are shown."
+                          ? "Checkout QR orders marked needs review and legacy records requiring final resolution are shown."
+                          : isCashSection
+                            ? "Approved Cash orders and their recorded collection status."
+                            : isHistorySection
+                              ? "All approved Cash and GCash QR orders plus unmatched legacy payment records."
                           : "Illustrative entries only; not connected to Firestore."}
                     </p>
                   </div>
@@ -703,6 +1104,14 @@ function AdminPayments() {
                         ? `${resolutionQueue.length} ${
                             resolutionQueue.length === 1 ? "record" : "records"
                           }`
+                        : isCashSection
+                          ? `${cashOrders.length} ${
+                              cashOrders.length === 1 ? "order" : "orders"
+                            }`
+                          : isHistorySection
+                            ? `${filteredTransactionHistory.length} of ${
+                                transactionHistory.length
+                              } transactions`
                         : `${records.length} sample ${
                           records.length === 1 ? "record" : "records"
                         }`}
@@ -714,19 +1123,23 @@ function AdminPayments() {
                       onClick={() =>
                         isQrSection
                           ? loadQrQueue(user.uid)
-                          : loadResolutionQueue(user.uid)
+                          : isResolutionSection
+                            ? loadResolutionQueue(user.uid)
+                            : isCashSection
+                              ? loadCashQueue(user.uid)
+                              : loadTransactionHistory(user.uid)
                       }
                       disabled={
                         isQrSection
                           ? qrQueueLoading
-                          : resolutionQueueLoading
+                          : isResolutionSection
+                            ? resolutionQueueLoading
+                            : isCashSection
+                              ? cashQueueLoading
+                              : transactionHistoryLoading
                       }
                     >
-                      {(isQrSection
-                        ? qrQueueLoading
-                        : resolutionQueueLoading)
-                        ? "Refreshing..."
-                        : "Refresh queue"}
+                      {isHistorySection ? "Refresh history" : "Refresh queue"}
                     </button>
                   )}
                 </div>
@@ -742,9 +1155,11 @@ function AdminPayments() {
                       </div>
                     )}
                     {qrQueueLoading ? (
-                      <div className="payments-queue-state" role="status">
-                        Loading pending QR submissions...
-                      </div>
+                      <AdminLoadingSkeleton
+                        label="Loading pending QR submissions"
+                        compact
+                        rows={3}
+                      />
                     ) : qrQueueError ? (
                       <div className="payments-queue-error" role="alert">
                         <p>{qrQueueError}</p>
@@ -763,18 +1178,22 @@ function AdminPayments() {
                         </span>
                         <h3>No QR submissions awaiting review</h3>
                         <p>
-                          New customer references will appear here while their
-                          payment status is pending review.
+                          New checkout QR orders and customer references will
+                          appear here while awaiting payment review.
                         </p>
                       </div>
                     ) : (
                       <div className="payments-qr-queue">
                         {qrQueue.map((entry) => {
-                          const actionId = `${entry.orderId}/${entry.submission.id}`;
+                          const actionId = entry.source === "checkout"
+                            ? `${entry.orderId}/checkout`
+                            : `${entry.orderId}/${entry.submission.id}`;
                           const verificationCheckboxId =
-                            `verify-${entry.orderId}-${entry.submission.id}`;
+                            `verify-${entry.orderId}-${entry.source === "checkout"
+                              ? "checkout"
+                              : entry.submission.id}`;
                           const rejectionInputId =
-                            `reject-${entry.orderId}-${entry.submission.id}`;
+                            `reject-${entry.orderId}-${entry.submission?.id || "checkout"}`;
                           const isReviewing = reviewingIds.has(actionId);
 
                           return (
@@ -802,9 +1221,25 @@ function AdminPayments() {
 
                               <dl className="payments-qr-details">
                                 <div>
-                                  <dt>Amount due</dt>
+                                  <dt>
+                                    {entry.source === "checkout"
+                                      ? "Order total"
+                                      : "Amount due"}
+                                  </dt>
                                   <dd>{formatPaymentAmount(entry.amountDue)}</dd>
                                 </div>
+                                {Number(entry.deliveryFee) > 0 && (
+                                  <div>
+                                    <dt>Delivery fee (included)</dt>
+                                    <dd>{formatPeso(entry.deliveryFee)}</dd>
+                                  </div>
+                                )}
+                                {Number(entry.waitingFee) > 0 && (
+                                  <div>
+                                    <dt>Waiting fee (collect at handoff)</dt>
+                                    <dd>{formatPeso(entry.waitingFee)}</dd>
+                                  </div>
+                                )}
                                 <div>
                                   <dt>Payment timing</dt>
                                   <dd>
@@ -816,45 +1251,65 @@ function AdminPayments() {
                                   </dd>
                                 </div>
                                 <div>
-                                  <dt>Attempt</dt>
-                                  <dd>{entry.submission.attemptNumber} of 3</dd>
-                                </div>
-                                <div>
-                                  <dt>Transaction reference</dt>
-                                  <dd>{entry.submission.referenceNumber}</dd>
-                                </div>
-                                <div>
                                   <dt>Submitted</dt>
                                   <dd>
-                                    {formatPaymentDate(entry.submission.submittedAt)}
+                                    {formatPaymentDate(
+                                      entry.submission?.submittedAt || entry.submittedAt,
+                                    )}
                                   </dd>
                                 </div>
+                                {entry.source === "checkout" ? (
+                                  <div>
+                                    <dt>Payment source</dt>
+                                    <dd>Checkout QR</dd>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <div>
+                                      <dt>Attempt</dt>
+                                      <dd>{entry.submission.attemptNumber} of 3</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Transaction reference</dt>
+                                      <dd>{entry.submission.referenceNumber}</dd>
+                                    </div>
+                                  </>
+                                )}
                               </dl>
 
-                              <div className="payments-previous-attempts">
-                                <strong>Previous attempts</strong>
-                                {entry.previousAttempts.length === 0 ? (
-                                  <p>No previous attempts.</p>
-                                ) : (
-                                  <ol>
-                                    {entry.previousAttempts.map((attempt) => (
-                                      <li key={attempt.id}>
-                                        <span>
-                                          Attempt {attempt.attemptNumber} ·{" "}
-                                          {attempt.status}
-                                        </span>
-                                        <code>{attempt.referenceNumber}</code>
-                                        {attempt.rejectionReason && (
-                                          <p>
-                                            Rejection reason:{" "}
-                                            {attempt.rejectionReason}
-                                          </p>
-                                        )}
-                                      </li>
-                                    ))}
-                                  </ol>
-                                )}
-                              </div>
+                              {entry.source === "checkout" ? (
+                                <CheckoutQrEvidence
+                                  entry={entry}
+                                  copyFeedback={copyFeedback}
+                                  onCopyReference={handleCopyReference}
+                                  onOpenReceipt={setReceiptPreview}
+                                />
+                              ) : (
+                                <div className="payments-previous-attempts">
+                                  <strong>Previous attempts</strong>
+                                  {entry.previousAttempts.length === 0 ? (
+                                    <p>No previous attempts.</p>
+                                  ) : (
+                                    <ol>
+                                      {entry.previousAttempts.map((attempt) => (
+                                        <li key={attempt.id}>
+                                          <span>
+                                            Attempt {attempt.attemptNumber} ·{" "}
+                                            {attempt.status}
+                                          </span>
+                                          <code>{attempt.referenceNumber}</code>
+                                          {attempt.rejectionReason && (
+                                            <p>
+                                              Rejection reason:{" "}
+                                              {attempt.rejectionReason}
+                                            </p>
+                                          )}
+                                        </li>
+                                      ))}
+                                    </ol>
+                                  )}
+                                </div>
+                              )}
 
                               <div className="payments-review-actions">
                                 <label
@@ -884,61 +1339,121 @@ function AdminPayments() {
                                   type="button"
                                   className="payments-action-button is-verify"
                                   onClick={() =>
-                                    handleReviewDecision(entry, "verify")
+                                    entry.source === "checkout"
+                                      ? handleCheckoutPaymentDecision(entry, "paid")
+                                      : handleReviewDecision(entry, "verify")
                                   }
                                   disabled={
                                     isReviewing
                                     || !externalVerification[actionId]
+                                    || (
+                                      entry.source === "checkout"
+                                      && (
+                                        !/^\d{13}$/.test(entry.paymentReference || "")
+                                        || !entry.paymentProofUrl
+                                      )
+                                    )
                                   }
                                 >
                                   {isReviewing ? "Saving..." : "Verify payment"}
                                 </button>
-                                <label
-                                  className="payments-rejection-label"
-                                  htmlFor={rejectionInputId}
-                                >
-                                  Rejection reason
-                                </label>
-                                <textarea
-                                  id={rejectionInputId}
-                                  value={reviewReasons[actionId] || ""}
-                                  onChange={(event) =>
-                                    setReviewReasons((current) => ({
-                                      ...current,
-                                      [actionId]: event.target.value,
-                                    }))
-                                  }
-                                  maxLength={500}
-                                  rows={3}
-                                  placeholder="Explain why this reference is rejected"
-                                  disabled={isReviewing}
-                                />
-                                <button
-                                  type="button"
-                                  className="payments-action-button is-reject"
-                                  onClick={() =>
-                                    handleReviewDecision(entry, "reject")
-                                  }
-                                  disabled={
-                                    isReviewing
-                                    || !reviewReasons[actionId]?.trim()
-                                  }
-                                >
-                                  {isReviewing ? "Saving..." : "Reject reference"}
-                                </button>
-                                {reviewFeedback[actionId] && (
-                                  <p
-                                    className={`payments-action-feedback is-${
-                                      reviewFeedback[actionId].type
-                                    }`}
-                                    role={
-                                      reviewFeedback[actionId].type === "error"
-                                        ? "alert"
-                                        : "status"
+                                {entry.source === "checkout" && (
+                                  <button
+                                    type="button"
+                                    className="payments-action-button is-review"
+                                    onClick={() =>
+                                      handleCheckoutPaymentDecision(
+                                        entry,
+                                        "needs_review",
+                                      )
                                     }
+                                    disabled={isReviewing}
                                   >
-                                    {reviewFeedback[actionId].message}
-                                  </p>
+                                    {isReviewing ? "Saving..." : "Needs review"}
+                                  </button>
+                                )}
+                                {entry.source !== "checkout" && (
+                                  <>
+                                    <label
+                                      className="payments-rejection-label"
+                                      htmlFor={rejectionInputId}
+                                    >
+                                      Rejection reason
+                                    </label>
+                                    <textarea
+                                      id={rejectionInputId}
+                                      value={reviewReasons[actionId] || ""}
+                                      onChange={(event) =>
+                                        setReviewReasons((current) => ({
+                                          ...current,
+                                          [actionId]: event.target.value,
+                                        }))
+                                      }
+                                      maxLength={500}
+                                      rows={3}
+                                      placeholder="Explain why this reference is rejected"
+                                      disabled={isReviewing}
+                                    />
+                                    <button
+                                      type="button"
+                                      className="payments-action-button is-reject"
+                                      onClick={() =>
+                                        handleReviewDecision(entry, "reject")
+                                      }
+                                      disabled={
+                                        isReviewing
+                                        || !reviewReasons[actionId]?.trim()
+                                      }
+                                    >
+                                      {isReviewing
+                                        ? "Saving..."
+                                        : "Reject reference"}
+                                    </button>
+                                    {reviewFeedback[actionId] && (
+                                      <p
+                                        className={`payments-action-feedback is-${
+                                          reviewFeedback[actionId].type
+                                        }`}
+                                        role={
+                                          reviewFeedback[actionId].type === "error"
+                                            ? "alert"
+                                            : "status"
+                                        }
+                                      >
+                                        {reviewFeedback[actionId].message}
+                                      </p>
+                                    )}
+                                  </>
+                                )}
+                                {entry.source === "checkout" && (
+                                  <button
+                                    type="button"
+                                    className="payments-action-button is-reject"
+                                    onClick={() =>
+                                      handleCheckoutPaymentDecision(
+                                        entry,
+                                        "rejected",
+                                      )
+                                    }
+                                    disabled={isReviewing}
+                                  >
+                                    {isReviewing ? "Saving..." : "Reject payment"}
+                                  </button>
+                                )}
+                                {entry.source === "checkout"
+                                  && reviewFeedback[actionId] && (
+                                    <p
+                                      className={`payments-action-feedback is-${
+                                        reviewFeedback[actionId].type
+                                      }`}
+                                      role={
+                                        reviewFeedback[actionId].type === "error"
+                                          ? "alert"
+                                          : "status"
+                                      }
+                                    >
+                                      {reviewFeedback[actionId].message}
+                                    </p>
                                 )}
                               </div>
                             </article>
@@ -960,9 +1475,11 @@ function AdminPayments() {
                       </div>
                     )}
                     {resolutionQueueLoading ? (
-                      <div className="payments-queue-state" role="status">
-                        Loading payments requiring final resolution...
-                      </div>
+                      <AdminLoadingSkeleton
+                        label="Loading payments requiring final resolution"
+                        compact
+                        rows={3}
+                      />
                     ) : resolutionQueueError ? (
                       <div className="payments-queue-error" role="alert">
                         <p>{resolutionQueueError}</p>
@@ -981,8 +1498,8 @@ function AdminPayments() {
                         </span>
                         <h3>No payments require final resolution</h3>
                         <p>
-                          Payments move here after the third reference is
-                          rejected and require a final administrator decision.
+                          Checkout payments flagged for review and legacy
+                          payments escalated after three rejections appear here.
                         </p>
                       </div>
                     ) : (
@@ -1017,9 +1534,25 @@ function AdminPayments() {
 
                               <dl className="payments-qr-details">
                                 <div>
-                                  <dt>Amount due</dt>
+                                  <dt>
+                                    {entry.source === "checkout"
+                                      ? "Order total"
+                                      : "Amount due"}
+                                  </dt>
                                   <dd>{formatPaymentAmount(entry.amountDue)}</dd>
                                 </div>
+                                {Number(entry.deliveryFee) > 0 && (
+                                  <div>
+                                    <dt>Delivery fee (included)</dt>
+                                    <dd>{formatPeso(entry.deliveryFee)}</dd>
+                                  </div>
+                                )}
+                                {Number(entry.waitingFee) > 0 && (
+                                  <div>
+                                    <dt>Waiting fee (collect at handoff)</dt>
+                                    <dd>{formatPeso(entry.waitingFee)}</dd>
+                                  </div>
+                                )}
                                 <div>
                                   <dt>Payment timing</dt>
                                   <dd>
@@ -1031,37 +1564,54 @@ function AdminPayments() {
                                   </dd>
                                 </div>
                                 <div>
-                                  <dt>Attempts used</dt>
-                                  <dd>{entry.attemptCount} of 3</dd>
+                                  <dt>
+                                    {entry.source === "checkout"
+                                      ? "Payment source"
+                                      : "Attempts used"}
+                                  </dt>
+                                  <dd>
+                                    {entry.source === "checkout"
+                                      ? "Checkout QR"
+                                      : `${entry.attemptCount} of 3`}
+                                  </dd>
                                 </div>
                               </dl>
 
-                              <div className="payments-previous-attempts">
-                                <strong>Submission history</strong>
-                                <ol>
-                                  {entry.submissions.map((submission) => (
-                                    <li key={submission.id}>
-                                      <span>
-                                        Attempt {submission.attemptNumber} ·{" "}
-                                        {submission.status}
-                                      </span>
-                                      <code>
-                                        Reference: {submission.referenceNumber}
-                                      </code>
-                                      <span>
-                                        Submitted{" "}
-                                        {formatPaymentDate(submission.submittedAt)}
-                                      </span>
-                                      {submission.rejectionReason && (
-                                        <p>
-                                          Rejection reason:{" "}
-                                          {submission.rejectionReason}
-                                        </p>
-                                      )}
-                                    </li>
-                                  ))}
-                                </ol>
-                              </div>
+                              {entry.source === "checkout" ? (
+                                <CheckoutQrEvidence
+                                  entry={entry}
+                                  copyFeedback={copyFeedback}
+                                  onCopyReference={handleCopyReference}
+                                  onOpenReceipt={setReceiptPreview}
+                                />
+                              ) : (
+                                <div className="payments-previous-attempts">
+                                  <strong>Submission history</strong>
+                                  <ol>
+                                    {entry.submissions.map((submission) => (
+                                      <li key={submission.id}>
+                                        <span>
+                                          Attempt {submission.attemptNumber} ·{" "}
+                                          {submission.status}
+                                        </span>
+                                        <code>
+                                          Reference: {submission.referenceNumber}
+                                        </code>
+                                        <span>
+                                          Submitted{" "}
+                                          {formatPaymentDate(submission.submittedAt)}
+                                        </span>
+                                        {submission.rejectionReason && (
+                                          <p>
+                                            Rejection reason:{" "}
+                                            {submission.rejectionReason}
+                                          </p>
+                                        )}
+                                      </li>
+                                    ))}
+                                  </ol>
+                                </div>
+                              )}
 
                               <div className="payments-resolution-actions">
                                 <label className="payments-verification-confirm">
@@ -1098,30 +1648,34 @@ function AdminPayments() {
                                   Mark as Paid
                                 </button>
 
-                                <label
-                                  className="payments-rejection-label"
-                                  htmlFor={`resolution-reason-${orderId}`}
-                                >
-                                  Final rejection reason
-                                </label>
-                                <textarea
-                                  id={`resolution-reason-${orderId}`}
-                                  value={resolutionReasons[orderId] || ""}
-                                  onChange={(event) =>
-                                    setResolutionReasons((current) => ({
-                                      ...current,
-                                      [orderId]: event.target.value,
-                                    }))
-                                  }
-                                  maxLength={500}
-                                  rows={3}
-                                  placeholder="Explain the final rejection decision"
-                                  disabled={isResolving || Boolean(confirmation)}
-                                />
-                                <p className="payments-reason-help">
-                                  Required for final rejection; maximum 500
-                                  characters.
-                                </p>
+                                {entry.source !== "checkout" && (
+                                  <>
+                                    <label
+                                      className="payments-rejection-label"
+                                      htmlFor={`resolution-reason-${orderId}`}
+                                    >
+                                      Final rejection reason
+                                    </label>
+                                    <textarea
+                                      id={`resolution-reason-${orderId}`}
+                                      value={resolutionReasons[orderId] || ""}
+                                      onChange={(event) =>
+                                        setResolutionReasons((current) => ({
+                                          ...current,
+                                          [orderId]: event.target.value,
+                                        }))
+                                      }
+                                      maxLength={500}
+                                      rows={3}
+                                      placeholder="Explain the final rejection decision"
+                                      disabled={isResolving || Boolean(confirmation)}
+                                    />
+                                    <p className="payments-reason-help">
+                                      Required for final rejection; maximum 500
+                                      characters.
+                                    </p>
+                                  </>
+                                )}
                                 <button
                                   type="button"
                                   className="payments-action-button is-reject"
@@ -1131,10 +1685,15 @@ function AdminPayments() {
                                   disabled={
                                     isResolving
                                     || Boolean(confirmation)
-                                    || !resolutionReasons[orderId]?.trim()
+                                    || (
+                                      entry.source !== "checkout"
+                                      && !resolutionReasons[orderId]?.trim()
+                                    )
                                   }
                                 >
-                                  Final Rejection
+                                  {entry.source === "checkout"
+                                    ? "Reject payment"
+                                    : "Final Rejection"}
                                 </button>
 
                                 {confirmation && (
@@ -1147,18 +1706,21 @@ function AdminPayments() {
                                       Confirm{" "}
                                       {confirmation === "paid"
                                         ? "Mark as Paid"
-                                        : "Final Rejection"}
+                                        : entry.source === "checkout"
+                                          ? "Reject payment"
+                                          : "Final Rejection"}
                                       ?
                                     </strong>
                                     <p>
-                                      This is a final decision after three
-                                      rejected references. The payment record
-                                      will not be reopened and submission
-                                      history will remain unchanged.
+                                      {entry.source === "checkout"
+                                        ? "This updates the checkout order payment status immediately for Admin Orders and My Orders."
+                                        : "This is a final decision after three rejected references. The payment record will not be reopened and submission history will remain unchanged."}
                                       {confirmation === "rejected"
-                                        ? ` Reason: ${
-                                            resolutionReasons[orderId]?.trim()
-                                          }`
+                                        ? entry.source === "checkout"
+                                          ? ""
+                                          : ` Reason: ${
+                                              resolutionReasons[orderId]?.trim()
+                                            }`
                                         : " You are confirming that the actual transaction was verified externally."}
                                     </p>
                                     <div>
@@ -1207,6 +1769,208 @@ function AdminPayments() {
                             </article>
                           );
                         })}
+                      </div>
+                    )}
+                  </>
+                ) : isCashSection ? (
+                  <>
+                    {cashPaymentFeedback && (
+                      <p className="payments-action-feedback is-success" role="status">
+                        {cashPaymentFeedback}
+                      </p>
+                    )}
+                    {cashQueueLoading ? (
+                      <AdminLoadingSkeleton
+                        label="Loading cash payment records"
+                        compact
+                        rows={3}
+                      />
+                    ) : cashQueueError ? (
+                      <div className="payments-queue-error" role="alert">
+                        <p>{cashQueueError}</p>
+                        <button
+                          type="button"
+                          className="payments-refresh-button"
+                          onClick={() => loadCashQueue(user.uid)}
+                        >
+                          Try again
+                        </button>
+                      </div>
+                    ) : cashOrders.length === 0 ? (
+                      <div className="payments-empty-state">
+                        <span className="payments-empty-icon" aria-hidden="true">
+                          {activeTab?.icon}
+                        </span>
+                        <h3>No approved Cash orders</h3>
+                        <p>
+                          Cash orders will appear here after staff approves a
+                          customer request.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="payments-table-wrap">
+                        <table className="payments-table">
+                          <thead>
+                            <tr>
+                              <th scope="col">Order</th>
+                              <th scope="col">Customer</th>
+                              <th scope="col">Items subtotal</th>
+                              <th scope="col">Delivery / waiting fees</th>
+                              <th scope="col">Total due</th>
+                              <th scope="col">Collection</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {cashOrders.map((order) => {
+                              const deliveryFee = Number(order.deliveryFee) || 0;
+                              const waitingFee = Number(order.waitingFee) || 0;
+                              const canCollect =
+                                order.cashPaymentStatus !== "paid"
+                                && order.status !== "Cancelled";
+                              return (
+                                <tr key={order.id}>
+                                  <td data-label="Order">
+                                    <strong className="payments-record-id">
+                                      {order.id}
+                                    </strong>
+                                    <span className="payments-record-subtitle">
+                                      {order.status || "Pending"}
+                                    </span>
+                                  </td>
+                                  <td data-label="Customer">
+                                    {order.customerName || "Customer"}
+                                  </td>
+                                  <td data-label="Items subtotal" className="payments-amount">
+                                    {formatPeso(
+                                      Number(order.itemsSubtotal)
+                                        || Number(order.total || 0) - deliveryFee,
+                                    )}
+                                  </td>
+                                  <td data-label="Delivery / waiting fees">
+                                    {deliveryFee > 0 && (
+                                      <span>Delivery: {formatPeso(deliveryFee)}</span>
+                                    )}
+                                    {waitingFee > 0 && (
+                                      <span>Waiting: {formatPeso(waitingFee)}</span>
+                                    )}
+                                    {!deliveryFee && !waitingFee && "—"}
+                                  </td>
+                                  <td data-label="Total due" className="payments-amount">
+                                    {formatPeso(order.amountDue)}
+                                  </td>
+                                  <td data-label="Collection">
+                                    {order.cashPaymentStatus === "paid" ? (
+                                      <span className="payments-status is-paid">
+                                        <span />
+                                        Paid
+                                        {order.cashPaymentAt?.toDate && (
+                                          <small>
+                                            {formatPaymentDate(order.cashPaymentAt)}
+                                          </small>
+                                        )}
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className="payments-action-button is-verify"
+                                        onClick={() => handleMarkCashPaid(order)}
+                                        disabled={
+                                          markingCashOrderId === order.id
+                                          || !canCollect
+                                        }
+                                      >
+                                        {markingCashOrderId === order.id
+                                          ? "Recording..."
+                                          : canCollect
+                                            ? "Mark as Paid"
+                                            : "Cancelled"}
+                                      </button>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                ) : isHistorySection ? (
+                  <>
+                    <div className="payments-history-controls">
+                      <div
+                        className="payments-history-filters"
+                        role="group"
+                        aria-label="Filter transaction history"
+                      >
+                        {historyFilters.map((filter) => (
+                          <button
+                            key={filter.id}
+                            type="button"
+                            className={`payments-history-filter${
+                              historyFilter === filter.id ? " is-active" : ""
+                            }`}
+                            aria-pressed={historyFilter === filter.id}
+                            onClick={() => setHistoryFilter(filter.id)}
+                          >
+                            {filter.label}
+                          </button>
+                        ))}
+                      </div>
+                      <label className="payments-history-search">
+                        <span>Search transactions</span>
+                        <input
+                          type="search"
+                          value={historySearch}
+                          onChange={(event) => setHistorySearch(event.target.value)}
+                          placeholder="Order ID, customer, or GCash reference"
+                        />
+                      </label>
+                    </div>
+                    {transactionHistoryLoading ? (
+                      <AdminLoadingSkeleton
+                        label="Loading transaction history"
+                        compact
+                        rows={3}
+                      />
+                    ) : transactionHistoryError ? (
+                      <div className="payments-queue-error" role="alert">
+                        <p>{transactionHistoryError}</p>
+                        <button
+                          type="button"
+                          className="payments-refresh-button"
+                          onClick={() => loadTransactionHistory(user.uid)}
+                        >
+                          Try again
+                        </button>
+                      </div>
+                    ) : filteredTransactionHistory.length === 0 ? (
+                      <div className="payments-empty-state">
+                        <span className="payments-empty-icon" aria-hidden="true">
+                          {activeTab?.icon}
+                        </span>
+                        <h3>
+                          {transactionHistory.length === 0
+                            ? "No transactions found"
+                            : "No matching transactions"}
+                        </h3>
+                        <p>
+                          {transactionHistory.length === 0
+                            ? "Approved GCash QR and Cash orders will appear here."
+                            : "Try another filter or search term."}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="payments-history-list">
+                        {filteredTransactionHistory.map((transaction) => (
+                          <TransactionHistoryCard
+                            key={transaction.id}
+                            transaction={transaction}
+                            copyFeedback={copyFeedback}
+                            onCopyReference={handleCopyReference}
+                            onOpenReceipt={setReceiptPreview}
+                          />
+                        ))}
                       </div>
                     )}
                   </>
@@ -1263,9 +2027,69 @@ function AdminPayments() {
                 )}
               </section>
             </section>
+              </>
+            )}
           </div>
         </div>
       </section>
+      <dialog
+        ref={receiptDialogRef}
+        className="payments-receipt-dialog"
+        aria-labelledby="payments-receipt-dialog-title"
+        onClose={() => setReceiptPreview(null)}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) {
+            receiptDialogRef.current?.close();
+          }
+        }}
+      >
+        {receiptPreview && (
+          <div className="payments-receipt-dialog-card">
+            <header>
+              <div>
+                <p>GCASH PAYMENT RECEIPT</p>
+                <h2 id="payments-receipt-dialog-title">
+                  Order {receiptPreview.orderId}
+                </h2>
+              </div>
+              <button
+                type="button"
+                className="payments-receipt-dialog-close"
+                onClick={() => receiptDialogRef.current?.close()}
+                aria-label="Close GCash receipt preview"
+              >
+                Close
+              </button>
+            </header>
+            <div className="payments-receipt-dialog-meta">
+              {receiptPreview.reference && (
+                <span>
+                  Reference <strong>{receiptPreview.reference}</strong>
+                </span>
+              )}
+              <span>
+                Order total{" "}
+                <strong>
+                  {Number.isFinite(receiptPreview.total)
+                    ? formatPeso(receiptPreview.total)
+                    : "Unavailable"}
+                </strong>
+              </span>
+            </div>
+            <img
+              src={receiptPreview.url}
+              alt={`GCash receipt for order ${receiptPreview.orderId}`}
+            />
+            <a
+              href={receiptPreview.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open original receipt
+            </a>
+          </div>
+        )}
+      </dialog>
     </main>
   );
 }

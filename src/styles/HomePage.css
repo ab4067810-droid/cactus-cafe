@@ -1,7 +1,31 @@
+/* ==========================================================================
+   Cactus Café – Home
+   Palette (scoped to .home-page so other pages are unaffected)
+   ~60% cream  · ~30% cactus green · ~5% coral · ~5% pale yellow
+   Contrast checked: green on cream 8.4:1, ink on cream >12:1,
+   muted on cream 5.7:1, cream on green 8.4:1, green on yellow >10:1.
+   Coral (#EE4129) is only ~3:1 on cream, so it is used for dots, stars,
+   underlines and rules, never for body text.
+   ========================================================================== */
+
 .home-page {
-  color: var(--color-text);
-  background: var(--color-white);
+  --home-cream: #eee2cb;
+  --home-cream-light: #f8f1e2;
+  --home-cream-deep: #e6d8bb;
+  --home-border: #d3c3a0;
+  --home-green: #1b4532;
+  --home-green-hover: #123325;
+  --home-ink: #16261d;
+  --home-muted: #4a5a4f;
+  --home-coral: #ee4129;
+  --home-yellow: #fcfca7;
+  --home-on-green: #e4eadf;
+
+  color: var(--home-ink);
+  background: var(--home-cream);
 }
+
+/* ---------- Hero ---------- */
 
 .home-hero {
   width: min(
@@ -23,10 +47,10 @@
 .hero-eyebrow,
 .section-eyebrow {
   margin: 0 0 18px;
-  color: var(--color-primary);
-  font-size: 0.75rem;
-  font-weight: 750;
-  letter-spacing: 0.14em;
+  color: var(--home-green);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
   line-height: 1.4;
 }
 
@@ -38,29 +62,29 @@
 }
 
 .hero-eyebrow::before {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 7px;
+  width: 9px;
+  height: 9px;
+  flex: 0 0 9px;
   border-radius: 50%;
-  background: var(--color-primary);
+  background: var(--home-coral);
   content: "";
 }
 
 .home-title {
   margin: 0;
-  color: var(--color-text);
+  color: var(--home-green);
   font-family: Georgia, "Times New Roman", serif;
   font-size: clamp(3.4rem, 5.5vw, 5.45rem);
   font-weight: 500;
-  letter-spacing: -0.06em;
-  line-height: 0.99;
+  letter-spacing: -0.04em;
+  line-height: 1;
   text-wrap: balance;
 }
 
 .home-subtitle {
   max-width: 48ch;
   margin: 26px 0 0;
-  color: var(--color-muted);
+  color: var(--home-muted);
   font-size: clamp(1.02rem, 1.45vw, 1.14rem);
   line-height: 1.8;
 }
@@ -73,16 +97,18 @@
   margin-top: 34px;
 }
 
+/* Buttons */
+
 .home-page .primary-button {
   min-height: 48px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0 22px;
-  border: 1px solid var(--color-primary);
+  border: 1px solid var(--home-green);
   border-radius: 8px;
-  background: var(--color-primary);
-  color: var(--color-white);
+  background: var(--home-green);
+  color: var(--home-cream-light);
   font-size: 0.94rem;
   font-weight: 700;
   text-decoration: none;
@@ -94,26 +120,33 @@
 
 .home-page .primary-button:hover {
   transform: translateY(-2px);
-  border-color: var(--color-primary-hover);
-  background: var(--color-primary-hover);
-  color: var(--color-white);
+  border-color: var(--home-green-hover);
+  background: var(--home-green-hover);
+  color: var(--home-cream-light);
 }
 
 .home-page .text-button {
   min-height: 44px;
   display: inline-flex;
   align-items: center;
-  color: var(--color-primary);
+  color: var(--home-green);
   font-size: 0.94rem;
   font-weight: 700;
   text-decoration: none;
+  text-decoration-color: var(--home-coral);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 6px;
+}
+
+.home-page .text-button:hover {
+  color: var(--home-green-hover);
+  text-decoration-line: underline;
 }
 
 .home-hero .primary-button {
   min-height: 54px;
   padding-inline: 25px;
   border-radius: 9px;
-  box-shadow: 0 8px 18px rgba(40, 115, 74, 0.16);
 }
 
 .home-hero .text-button {
@@ -133,9 +166,11 @@
 
 .home-page .primary-button:focus-visible,
 .home-page .text-button:focus-visible {
-  outline: 3px solid var(--color-focus);
+  outline: 3px solid var(--home-green);
   outline-offset: 4px;
 }
+
+/* Hero image: arched "café window" with a solid green offset block */
 
 .hero-visual {
   position: relative;
@@ -143,22 +178,9 @@
   max-height: 560px;
   aspect-ratio: 1.08 / 1;
   overflow: hidden;
-  border: 1px solid rgba(51, 58, 51, 0.08);
-  border-radius: 28px;
-  background: var(--color-off-white);
-  box-shadow: 0 24px 56px rgba(51, 58, 51, 0.15);
-}
-
-.hero-visual::after {
-  position: absolute;
-  inset: 28% 0 0;
-  background: linear-gradient(
-    to bottom,
-    transparent,
-    rgba(24, 39, 29, 0.62)
-  );
-  content: "";
-  pointer-events: none;
+  border-radius: 240px 240px 24px 24px;
+  background: var(--home-cream-deep);
+  box-shadow: 14px 14px 0 var(--home-green);
 }
 
 .hero-visual img {
@@ -171,18 +193,22 @@
 
 .hero-visual p {
   position: absolute;
-  right: 28px;
+  left: 24px;
   bottom: 24px;
   z-index: 1;
   max-width: calc(100% - 48px);
   margin: 0;
-  color: var(--color-white);
-  font-size: 0.9rem;
+  padding: 9px 16px;
+  border-radius: 999px;
+  background: var(--home-green);
+  color: var(--home-cream-light);
+  font-size: 0.88rem;
   font-weight: 650;
-  letter-spacing: 0.02em;
-  line-height: 1.5;
-  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.25);
+  letter-spacing: 0.01em;
+  line-height: 1.4;
 }
+
+/* ---------- Intro band (the one deep-green moment) ---------- */
 
 .home-intro {
   display: grid;
@@ -191,34 +217,36 @@
   column-gap: clamp(36px, 7vw, 96px);
   padding: clamp(70px, 8vw, 104px)
     max(var(--page-gutter), calc((100% - var(--content-width)) / 2));
-  border-top: 1px solid rgba(51, 58, 51, 0.06);
-  background: var(--color-off-white);
+  background: var(--home-green);
 }
 
 .home-intro .section-eyebrow {
   grid-column: 1 / -1;
   margin-bottom: 18px;
+  color: var(--home-yellow);
 }
 
 .home-intro h2 {
   max-width: 690px;
   margin: 0;
-  color: var(--color-text);
+  color: var(--home-cream);
   font-family: Georgia, "Times New Roman", serif;
   font-size: clamp(2.35rem, 4.2vw, 3.5rem);
   font-weight: 500;
-  letter-spacing: -0.045em;
-  line-height: 1.08;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
   text-wrap: balance;
 }
 
 .home-intro > p:last-child {
   max-width: 440px;
   margin: 0;
-  color: var(--color-muted);
+  color: var(--home-on-green);
   font-size: clamp(1rem, 1.3vw, 1.08rem);
   line-height: 1.85;
 }
+
+/* ---------- Featured menu ---------- */
 
 .home-featured-menu {
   width: min(
@@ -239,17 +267,18 @@
 
 .featured-menu-heading .section-eyebrow {
   margin-bottom: 12px;
-  letter-spacing: 0.15em;
 }
 
-.featured-menu-heading h2 {
+.featured-menu-heading h2,
+.reviews-heading h2,
+.features-heading h2 {
   margin: 0;
-  color: var(--color-text);
+  color: var(--home-green);
   font-family: Georgia, "Times New Roman", serif;
   font-size: clamp(2.15rem, 3.8vw, 3rem);
   font-weight: 500;
-  letter-spacing: -0.045em;
-  line-height: 1.08;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
   text-wrap: balance;
 }
 
@@ -258,7 +287,6 @@
   flex: 0 0 auto;
   padding-inline: 22px;
   border-radius: 9px;
-  box-shadow: 0 6px 16px rgba(40, 115, 74, 0.13);
 }
 
 .featured-menu-grid {
@@ -268,13 +296,17 @@
   gap: 24px;
 }
 
+.featured-menu-card,
+.feature-card,
+.public-review {
+  border: 1px solid var(--home-border);
+  background: var(--home-cream-light);
+}
+
 .featured-menu-card {
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--color-border);
-  border-radius: 18px;
-  background: var(--color-white);
-  box-shadow: 0 10px 28px rgba(51, 58, 51, 0.055);
+  border-radius: 16px;
   transition:
     transform 200ms ease,
     box-shadow 200ms ease,
@@ -282,9 +314,9 @@
 }
 
 .featured-menu-card:hover {
-  transform: translateY(-5px);
-  border-color: rgba(40, 115, 74, 0.32);
-  box-shadow: 0 18px 38px rgba(51, 58, 51, 0.12);
+  transform: translateY(-4px);
+  border-color: var(--home-green);
+  box-shadow: 0 14px 28px rgba(27, 69, 50, 0.14);
 }
 
 .featured-menu-image {
@@ -303,8 +335,8 @@
 .featured-menu-image-placeholder {
   display: grid;
   place-items: center;
-  background: var(--color-off-white);
-  color: var(--color-primary);
+  background: var(--home-cream-deep);
+  color: var(--home-green);
   font-size: 2rem;
 }
 
@@ -313,48 +345,54 @@
 }
 
 .featured-menu-copy .featured-menu-category {
-  margin: 0 0 9px;
-  color: var(--color-primary);
-  font-size: 0.72rem;
-  font-weight: 750;
-  letter-spacing: 0.1em;
+  display: inline-block;
+  margin: 0 0 12px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: var(--home-yellow);
+  color: var(--home-green);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
   line-height: 1.4;
-  text-transform: uppercase;
 }
 
 .featured-menu-copy h3 {
   margin: 0;
-  color: var(--color-text);
+  color: var(--home-green);
   font-size: 1.22rem;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.015em;
   line-height: 1.35;
 }
 
 .featured-menu-copy > p:not(.featured-menu-category) {
   min-height: 3.3em;
   margin: 10px 0 18px;
-  color: var(--color-muted);
+  color: var(--home-muted);
   font-size: 0.94rem;
   line-height: 1.7;
   overflow-wrap: anywhere;
 }
 
 .featured-menu-copy strong {
-  color: var(--color-primary);
-  font-size: 1.05rem;
+  color: var(--home-green);
+  font-size: 1.1rem;
   font-weight: 750;
 }
 
 .featured-menu-message {
   margin: 0;
   padding: 28px 20px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  color: var(--color-muted);
+  border: 1px solid var(--home-border);
+  border-radius: 12px;
+  background: var(--home-cream-light);
+  color: var(--home-muted);
   line-height: 1.6;
   text-align: center;
 }
+
+/* ---------- Reviews (full-width deeper-cream band) ---------- */
 
 .home-reviews {
   width: min(
@@ -363,6 +401,9 @@
   );
   margin-inline: auto;
   padding-block: clamp(58px, 7vw, 82px);
+  background: var(--home-cream-deep);
+  box-shadow: 0 0 0 100vmax var(--home-cream-deep);
+  clip-path: inset(0 -100vmax);
 }
 
 .reviews-heading {
@@ -372,18 +413,6 @@
 
 .reviews-heading .section-eyebrow {
   margin-bottom: 12px;
-  letter-spacing: 0.15em;
-}
-
-.reviews-heading h2 {
-  margin: 0;
-  color: var(--color-text);
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: clamp(2.15rem, 3.8vw, 3rem);
-  font-weight: 500;
-  letter-spacing: -0.045em;
-  line-height: 1.08;
-  text-wrap: balance;
 }
 
 .public-review-grid {
@@ -398,10 +427,7 @@
   display: flex;
   flex-direction: column;
   padding: 24px;
-  border: 1px solid var(--color-border);
-  border-radius: 18px;
-  background: linear-gradient(145deg, #ffffff 0%, var(--color-off-white) 100%);
-  box-shadow: 0 9px 26px rgba(51, 58, 51, 0.05);
+  border-radius: 16px;
   transition:
     transform 200ms ease,
     border-color 200ms ease,
@@ -409,9 +435,9 @@
 }
 
 .public-review:hover {
-  transform: translateY(-4px);
-  border-color: rgba(40, 115, 74, 0.28);
-  box-shadow: 0 16px 34px rgba(51, 58, 51, 0.09);
+  transform: translateY(-3px);
+  border-color: var(--home-green);
+  box-shadow: 0 12px 26px rgba(27, 69, 50, 0.12);
 }
 
 .public-review-rating {
@@ -420,13 +446,13 @@
   justify-content: space-between;
   gap: 12px;
   min-width: 0;
-  color: var(--color-primary);
+  color: var(--home-green);
   font-size: 0.82rem;
   font-weight: 700;
 }
 
 .public-review-rating span:first-child {
-  color: #b1782b;
+  color: var(--home-coral);
   font-size: 1.08rem;
   letter-spacing: 0.1em;
   line-height: 1;
@@ -435,16 +461,16 @@
 
 .public-review-rating span:last-child {
   flex: 0 0 auto;
-  padding: 5px 9px;
-  border: 1px solid rgba(40, 115, 74, 0.12);
+  padding: 5px 10px;
   border-radius: 999px;
-  background: rgba(40, 115, 74, 0.06);
+  background: var(--home-yellow);
+  color: var(--home-green);
 }
 
 .public-review-comment {
   flex: 1;
   margin: 20px 0 25px;
-  color: var(--color-text);
+  color: var(--home-ink);
   font-family: Georgia, "Times New Roman", serif;
   font-size: 1.12rem;
   line-height: 1.7;
@@ -459,7 +485,7 @@
   flex-wrap: wrap;
   gap: 6px 12px;
   padding-top: 14px;
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid var(--home-border);
   overflow-wrap: anywhere;
 }
 
@@ -478,8 +504,8 @@
   place-items: center;
   overflow: hidden;
   border-radius: 50%;
-  background: #eaf4ed;
-  color: var(--color-primary);
+  background: var(--home-green);
+  color: var(--home-cream-light);
   font-size: 12px;
   font-weight: 800;
 }
@@ -498,13 +524,13 @@
 .public-review-author strong {
   min-width: 0;
   overflow-wrap: anywhere;
-  color: var(--color-primary);
+  color: var(--home-green);
   font-size: 0.94rem;
   font-weight: 700;
 }
 
 .public-review-date {
-  color: var(--color-muted);
+  color: var(--home-muted);
   font-size: 0.78rem;
   line-height: 1.5;
   text-align: right;
@@ -513,11 +539,10 @@
 .reviews-message {
   margin: 0;
   padding: clamp(28px, 4vw, 40px) 22px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--home-border);
   border-radius: 16px;
-  background: var(--color-off-white);
-  box-shadow: 0 8px 24px rgba(51, 58, 51, 0.04);
-  color: var(--color-muted);
+  background: var(--home-cream-light);
+  color: var(--home-muted);
   line-height: 1.6;
   text-align: center;
 }
@@ -530,10 +555,10 @@
   min-height: 44px;
   margin-top: 16px;
   padding: 0 19px;
-  border: 1px solid var(--color-primary);
+  border: 1px solid var(--home-green);
   border-radius: 8px;
-  background: var(--color-white);
-  color: var(--color-primary);
+  background: transparent;
+  color: var(--home-green);
   font: inherit;
   font-weight: 700;
   cursor: pointer;
@@ -545,12 +570,12 @@
 
 .reviews-retry-button:hover {
   transform: translateY(-1px);
-  background: var(--color-primary);
-  color: var(--color-white);
+  background: var(--home-green);
+  color: var(--home-cream-light);
 }
 
 .reviews-retry-button:focus-visible {
-  outline: 3px solid var(--color-focus);
+  outline: 3px solid var(--home-green);
   outline-offset: 3px;
 }
 
@@ -558,26 +583,28 @@
   display: block;
   min-height: 44px;
   margin: 24px auto 0;
-  padding: 0 18px;
-  border: 1px solid rgba(40, 115, 74, 0.2);
+  padding: 0 20px;
+  border: 1px solid var(--home-green);
   border-radius: 999px;
-  background: var(--color-white);
-  color: var(--color-primary);
+  background: transparent;
+  color: var(--home-green);
   font: inherit;
   font-size: 0.88rem;
   font-weight: 700;
   cursor: pointer;
+  transition: background-color 180ms ease;
 }
 
 .public-reviews-toggle:hover {
-  border-color: var(--color-primary);
-  background: var(--color-off-white);
+  background: var(--home-yellow);
 }
 
 .public-reviews-toggle:focus-visible {
-  outline: 3px solid var(--color-focus);
+  outline: 3px solid var(--home-green);
   outline-offset: 3px;
 }
+
+/* ---------- Features ---------- */
 
 .home-features {
   width: min(
@@ -598,18 +625,10 @@
 
 .features-heading .section-eyebrow {
   margin-bottom: 12px;
-  letter-spacing: 0.15em;
 }
 
 .features-heading h2 {
-  margin: 0;
-  color: var(--color-text);
-  font-family: Georgia, "Times New Roman", serif;
   font-size: clamp(2.1rem, 3.7vw, 2.9rem);
-  font-weight: 500;
-  letter-spacing: -0.045em;
-  line-height: 1.08;
-  text-wrap: balance;
 }
 
 .home-page .features-heading .text-button {
@@ -629,10 +648,7 @@
 .feature-card {
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--color-border);
-  border-radius: 18px;
-  background: var(--color-white);
-  box-shadow: 0 9px 26px rgba(51, 58, 51, 0.05);
+  border-radius: 16px;
   transition:
     transform 200ms ease,
     border-color 200ms ease,
@@ -640,9 +656,9 @@
 }
 
 .feature-card:hover {
-  transform: translateY(-5px);
-  border-color: rgba(40, 115, 74, 0.28);
-  box-shadow: 0 17px 36px rgba(51, 58, 51, 0.1);
+  transform: translateY(-4px);
+  border-color: var(--home-green);
+  box-shadow: 0 14px 28px rgba(27, 69, 50, 0.14);
 }
 
 .feature-image {
@@ -665,30 +681,32 @@
 .feature-number {
   display: block;
   margin-bottom: 12px;
-  color: var(--color-primary);
-  font-size: 0.7rem;
-  font-weight: 750;
-  letter-spacing: 0.12em;
+  color: var(--home-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
   line-height: 1.5;
 }
 
 .feature-card h3 {
   margin: 0;
-  color: var(--color-text);
+  color: var(--home-green);
   font-family: Georgia, "Times New Roman", serif;
   font-size: 1.32rem;
   font-weight: 700;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.02em;
   line-height: 1.3;
 }
 
 .feature-card p {
   margin: 11px 0 0;
-  color: var(--color-muted);
+  color: var(--home-muted);
   font-size: 0.95rem;
   line-height: 1.7;
   overflow-wrap: anywhere;
 }
+
+/* ---------- Responsive ---------- */
 
 @media (max-width: 850px) {
   .home-hero {
@@ -707,10 +725,11 @@
   }
 
   .hero-visual {
-    width: 100%;
+    width: calc(100% - 14px);
     min-height: 0;
     max-height: 440px;
     aspect-ratio: 16 / 10;
+    border-radius: 180px 180px 22px 22px;
   }
 
   .home-intro {
@@ -719,18 +738,11 @@
     padding-block: 66px;
   }
 
-  .feature-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .featured-menu-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
+  .feature-grid,
+  .featured-menu-grid,
   .public-review-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-
 }
 
 @media (max-width: 600px) {
@@ -742,7 +754,7 @@
   .home-title {
     max-width: 11ch;
     font-size: clamp(3.15rem, 13.5vw, 4.15rem);
-    line-height: 1;
+    line-height: 1.02;
   }
 
   .home-subtitle {
@@ -762,22 +774,19 @@
     width: 100%;
   }
 
-  .hero-visual,
-  .hero-visual img {
-    min-height: 0;
-  }
-
   .hero-visual {
+    width: calc(100% - 8px);
     min-height: 250px;
     max-height: none;
     aspect-ratio: 4 / 3;
-    border-radius: 20px;
+    border-radius: 120px 120px 18px 18px;
+    box-shadow: 8px 8px 0 var(--home-green);
   }
 
   .hero-visual p {
-    right: 20px;
-    bottom: 18px;
-    max-width: calc(100% - 40px);
+    left: 16px;
+    bottom: 16px;
+    max-width: calc(100% - 32px);
   }
 
   .home-intro {
@@ -804,15 +813,16 @@
     line-height: 1.75;
   }
 
+  .home-features,
+  .home-featured-menu {
+    padding-block: 54px;
+  }
+
   .home-features {
     padding-block: 58px;
   }
 
   .home-reviews {
-    padding-block: 54px;
-  }
-
-  .home-featured-menu {
     padding-block: 54px;
   }
 
@@ -856,49 +866,133 @@
   .feature-copy {
     padding: 21px 22px 24px;
   }
-
 }
+
+/* ---------- Loading skeletons ---------- */
+
+.home-skeleton-shape,
+.home-skeleton-image {
+  position: relative;
+  overflow: hidden;
+  background: var(--home-cream-deep);
+}
+
+.home-skeleton-shape::after,
+.home-skeleton-image::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgb(248 241 226 / 75%),
+    transparent
+  );
+  animation: home-skeleton-shimmer 1.4s ease-in-out infinite;
+  content: "";
+}
+
+.featured-menu-skeleton-card .featured-menu-copy {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.home-skeleton-category,
+.home-skeleton-price {
+  height: 11px;
+}
+
+.home-skeleton-category {
+  width: 30%;
+}
+
+.home-skeleton-title {
+  width: 68%;
+  height: 20px;
+}
+
+.home-skeleton-description {
+  width: 100%;
+  height: 12px;
+  margin-top: 8px;
+}
+
+.home-skeleton-price {
+  width: 26%;
+  margin-top: 8px;
+}
+
+.public-review-skeleton-card {
+  display: grid;
+  min-height: 220px;
+  align-content: start;
+  gap: 18px;
+}
+
+.home-skeleton-rating,
+.home-skeleton-quote,
+.home-skeleton-byline {
+  height: 13px;
+}
+
+.home-skeleton-rating {
+  width: 42%;
+}
+
+.home-skeleton-quote {
+  width: 100%;
+  height: 16px;
+}
+
+.home-skeleton-quote-short {
+  width: 72%;
+}
+
+.home-skeleton-byline {
+  width: 55%;
+  height: 36px;
+  margin-top: 16px;
+}
+
+@keyframes home-skeleton-shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* ---------- Reduced motion ---------- */
 
 @media (prefers-reduced-motion: reduce) {
   .home-page .primary-button,
   .home-page .text-button::after,
   .feature-card,
+  .feature-image,
   .featured-menu-card,
-  .featured-menu-image {
-    transition: none;
-  }
-
-  .home-page .primary-button:hover,
-  .feature-card:hover,
-  .featured-menu-card:hover {
-    transform: none;
-  }
-
-  .feature-card,
-  .feature-image {
-    transition: none;
-  }
-
-  .feature-card:hover .feature-image {
-    transform: none;
-  }
-
+  .featured-menu-image,
   .public-review,
-  .reviews-retry-button {
-    transition: none;
-  }
-
-  .public-review:hover,
-  .reviews-retry-button:hover {
-    transform: none;
-  }
-
+  .reviews-retry-button,
+  .public-reviews-toggle,
   .footer-brand,
   .footer-link-group a {
     transition: none;
   }
 
+  .home-page .primary-button:hover,
+  .feature-card:hover,
+  .featured-menu-card:hover,
+  .public-review:hover,
+  .reviews-retry-button:hover,
   .footer-link-group a:hover {
     transform: none;
+  }
+
+  .feature-card:hover .feature-image,
+  .featured-menu-card:hover .featured-menu-image {
+    transform: none;
+  }
+
+  .home-skeleton-shape::after,
+  .home-skeleton-image::after {
+    animation: none;
   }
 }

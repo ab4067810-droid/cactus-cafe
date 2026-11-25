@@ -177,12 +177,10 @@ function MyReservations() {
       <main className="my-reservations-page">
         <section
           className="my-reservations-container"
+          role="status"
           aria-busy="true"
           aria-label="Loading your reservations"
         >
-          <p className="reservations-loading-status" role="status">
-            Loading your reservations...
-          </p>
           <div className="reservations-loading-card" aria-hidden="true">
             <div className="reservation-skeleton-header">
               <span />

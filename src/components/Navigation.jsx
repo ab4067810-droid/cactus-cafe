@@ -26,12 +26,17 @@ const customerLinks = [
 ];
 
 const adminLinks = [
+  { label: "Delivery Settings", to: "/admin/delivery-settings" },
+  { label: "Reviews", to: "/admin/reviews" },
+  { label: "Customers & Security", to: "/admin/users" },
+  { label: "Monthly Records", to: "/admin/monthly-records" },
+];
+
+const staffLinks = [
   { label: "Menu Management", to: "/admin/menu" },
   { label: "Orders", to: "/admin/orders" },
   { label: "Payment Management", to: "/admin/payments" },
   { label: "Reservations", to: "/admin/reservations" },
-  { label: "Reviews", to: "/admin/reviews" },
-  { label: "Monthly Records", to: "/admin/monthly-records" },
 ];
 
 const getAccountInitials = (name) => {
@@ -81,6 +86,42 @@ function AccountAvatar({ user }) {
   );
 }
 
+function OutForDeliveryToast({ notification, onDismiss }) {
+  return (
+    <aside className="delivery-status-toast" role="status" aria-live="polite">
+      <span className="delivery-status-toast-icon" aria-hidden="true">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M3 6h11v11H3z" />
+          <path d="M14 10h4l3 3v4h-7z" />
+          <circle cx="7.5" cy="18" r="1.5" />
+          <circle cx="17.5" cy="18" r="1.5" />
+        </svg>
+      </span>
+      <div className="delivery-status-toast-copy">
+        <span>OUT FOR DELIVERY</span>
+        <strong>Your order is on the way</strong>
+        <p>{notification.message}</p>
+        <small>Order {notification.orderId}</small>
+      </div>
+      <button
+        type="button"
+        className="delivery-status-toast-dismiss"
+        aria-label={`Dismiss delivery update for order ${notification.orderId}`}
+        onClick={() => onDismiss(notification.key)}
+      >
+        ×
+      </button>
+    </aside>
+  );
+}
+
 function Navigation() {
   const [openMenuPath, setOpenMenuPath] = useState(null);
   const [openAccountMenuPath, setOpenAccountMenuPath] = useState(null);
@@ -92,9 +133,11 @@ function Navigation() {
     order: false,
     reservation: false,
   });
+  const [deliveryToasts, setDeliveryToasts] = useState([]);
   const accountMenuRef = useRef(null);
   const accountTriggerRef = useRef(null);
   const cartButtonRef = useRef(null);
+  const seenDeliveryNotificationsRef = useRef(new Set());
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const { user, role, loading, roleError } = useAuth();
@@ -144,6 +187,65 @@ function Navigation() {
         });
 
         setUnreadNotifications({ userId, ...unreadTypes });
+
+        snapshot.docChanges().forEach((change) => {
+          if (change.type !== "added") return;
+
+          const notification = change.doc.data();
+          if (
+            notification.type !== "order"
+            || notification.title !== "Order status updated"
+            || typeof notification.itemId !== "string"
+            || !notification.itemId
+            || typeof notification.message !== "string"
+            || !notification.message.startsWith(
+              "Your delivery order is on the way.",
+            )
+          ) {
+            return;
+          }
+
+          const toastKey =
+            `${userId}:${notification.itemId}:Out for Delivery`;
+          const storageKey = `cactus-cafe:delivery-toast:${toastKey}`;
+          let alreadySeen =
+            seenDeliveryNotificationsRef.current.has(storageKey);
+
+          try {
+            alreadySeen = alreadySeen
+              || window.sessionStorage.getItem(storageKey) === "shown";
+          } catch (storageError) {
+            console.error(
+              "Unable to read delivery notification session state:",
+              storageError,
+            );
+          }
+          if (alreadySeen) return;
+
+          seenDeliveryNotificationsRef.current.add(storageKey);
+          try {
+            window.sessionStorage.setItem(storageKey, "shown");
+          } catch (storageError) {
+            console.error(
+              "Unable to save delivery notification session state:",
+              storageError,
+            );
+          }
+
+          setDeliveryToasts((currentToasts) => (
+            currentToasts.some((toast) => toast.key === toastKey)
+              ? currentToasts
+              : [
+                ...currentToasts,
+                {
+                  key: toastKey,
+                  userId,
+                  orderId: notification.itemId,
+                  message: notification.message,
+                },
+              ]
+          ));
+        });
       },
       (error) => {
         console.error("Error listening for unread notifications:", error);
@@ -206,7 +308,9 @@ function Navigation() {
       ? customerLinks
       : role === "admin"
         ? adminLinks
-        : [];
+        : role === "staff"
+          ? staffLinks
+          : [];
 
   const handleLogout = async () => {
     if (isLoggingOut) return;
@@ -281,7 +385,7 @@ function Navigation() {
               </NavLink>
             )}
 
-            {!loading && user && role === "admin" && (
+            {!loading && user && ["admin", "staff"].includes(role) && (
               <button
                 type="button"
                 className="login-btn navbar-logout"
@@ -300,7 +404,7 @@ function Navigation() {
           </div>
 
           <div className="navbar-tools">
-            {!loading && user && role !== "admin" && (
+            {!loading && user && role === "customer" && (
               <button
                 ref={cartButtonRef}
                 type="button"
@@ -543,6 +647,24 @@ function Navigation() {
           </div>
         </div>
       </nav>
+      {role === "customer"
+        && deliveryToasts.some((toast) => toast.userId === userId) && (
+        <div className="delivery-status-toast-stack">
+          {deliveryToasts
+            .filter((toast) => toast.userId === userId)
+            .map((notification) => (
+            <OutForDeliveryToast
+              key={notification.key}
+              notification={notification}
+              onDismiss={(toastKey) => {
+                setDeliveryToasts((currentToasts) =>
+                  currentToasts.filter((toast) => toast.key !== toastKey)
+                );
+              }}
+            />
+          ))}
+        </div>
+      )}
       <CartPanel
         isOpen={isCartOpen}
         onClose={closeCart}

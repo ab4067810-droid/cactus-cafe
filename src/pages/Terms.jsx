@@ -131,36 +131,40 @@ function Terms() {
             <section id="pickup-delivery" className="legal-section">
               <h2>4. Pickup and delivery arrangements</h2>
               <p>
-                Checkout currently supports takeout and delivery order types.
-                For delivery, provide a complete address and any helpful
-                delivery instructions. Your name and contact number are
-                collected with an order request. The website does not specify
-                delivery zones, fees, or guaranteed delivery times; confirm
-                those details with Cactus Café before relying on delivery.
+                Checkout supports Dine-in, Takeout, and Delivery. A table
+                number is not required to submit a Dine-in order. For
+                delivery, provide a complete address and any helpful
+                instructions, and check the service area shown at checkout.
+                Your name and reachable contact number are collected with an
+                order request.
               </p>
               <p>
-                Keep your phone available for order coordination. Any
-                estimated preparation, pickup, or delivery time is subject to
-                confirmation by Cactus Café.
+                For a delivery handoff, the rider allows a 10-minute grace
+                period after arriving at the provided location. A ₱20 waiting
+                fee may apply if additional waiting is needed after that
+                period. The café may take a Proof of Delivery photo to
+                document the completed handoff and resolve delivery questions.
+                Keep your phone available so the rider can coordinate with
+                you. Preparation, pickup, and delivery times are estimates
+                unless confirmed by Cactus Café.
               </p>
             </section>
 
             <section id="payments" className="legal-section">
               <h2>5. Payment options</h2>
               <p>
-                Checkout currently records a selection of Cash or generic QR
-                Payment, and a separate timing choice of Advance Payment or Pay
-                Later. Pay Later is described in the interface as payment when
-                the order is handed over. The website does not define a
-                separate Cash on Delivery workflow.
+                Cash at Counter is the default Dine-in option; payment remains
+                unpaid until you pay at the counter. GCash / QR is optional
+                for Dine-in and remains subject to verification. For Takeout
+                and Delivery, Cash is available when the order total is below
+                ₱500. At ₱500 or more, GCash / QR payment upfront is required.
               </p>
               <p>
-                The current website does not identify a QR payment provider,
-                display an in-app payment QR code, accept payment screenshots,
-                or automatically verify QR payments. Selecting a payment
-                option is not a payment receipt or confirmation. Follow
-                payment instructions confirmed directly by Cactus Café and
-                retain any receipt issued by the payment provider.
+                A QR selection is pending verification until the café
+                confirms the payment. Follow the payment instructions shown
+                after your request is approved and submit the transaction
+                reference in My Orders. Selecting QR is not itself a payment
+                receipt or confirmation.
               </p>
             </section>
 
@@ -178,6 +182,11 @@ function Terms() {
                 Cancellation availability may depend on the order’s status and
                 preparation progress. The business should confirm its
                 cancellation procedure before publishing this policy.
+              </p>
+              <p>
+                If Cactus Café cannot reach you to confirm or coordinate a
+                Cash order, it may hold the order while attempting contact or
+                cancel it if it cannot be fulfilled safely and reliably.
               </p>
             </section>
 

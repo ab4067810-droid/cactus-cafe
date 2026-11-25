@@ -1,6 +1,7 @@
 import AppRoutes from "./routes/AppRoutes";
 import { AuthProvider } from "./context/Authcontext";
 import { CartProvider } from "./context/CartContext";
+import BlockedPhoneWarningModal from "./components/BlockedPhoneWarningModal";
 import "./styles/App.css";
 
 /**
@@ -17,6 +18,7 @@ function App() {
   return (
     <div id="App">
       <AuthProvider>
+        <BlockedPhoneWarningModal />
         <CartProvider>
           <AppRoutes />
         </CartProvider>

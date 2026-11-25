@@ -2,10 +2,12 @@ import {
   doc,
   getDoc,
   serverTimestamp,
+  updateDoc,
   writeBatch,
 } from "firebase/firestore";
 
 import { getApprovalPricing } from "../utils/approvalPricing.js";
+import { getOrderApprovalPricing } from "../utils/deliveryFees.js";
 
 const itemKeys = ["id", "name", "price", "quantity", "subtotal"];
 const drinkSizes = ["8oz", "12oz", "16oz"];
@@ -22,6 +24,21 @@ const samePricing = (confirmedPricing, currentPricing) => {
     || !Array.isArray(confirmedPricing.orderItems)
     || confirmedPricing.orderItems.length !== currentPricing.orderItems.length
     || confirmedPricing.total !== currentPricing.total
+    || (
+      confirmedPricing.itemsSubtotal !== undefined
+      && confirmedPricing.itemsSubtotal !== currentPricing.itemsSubtotal
+    )
+    || (
+      confirmedPricing.deliveryFee !== undefined
+      && confirmedPricing.deliveryFee !== currentPricing.deliveryFee
+    )
+    || (
+      currentPricing.deliveryFee > 0
+      && (
+        confirmedPricing.itemsSubtotal === undefined
+        || confirmedPricing.deliveryFee === undefined
+      )
+    )
   ) {
     return false;
   }
@@ -69,10 +86,12 @@ export const approveOrderRequest = async (
 
   const requestRef = doc(database, "orderRequests", requestId);
   const orderRef = doc(database, "orders", requestId);
+  const paymentSelectionRef = doc(database, "paymentSelections", requestId);
 
   let requestSnapshot;
   let migrationSnapshot;
   let priceBookSnapshot;
+  let paymentSelectionSnapshot;
   try {
     requestSnapshot = await getDoc(requestRef);
     if (!requestSnapshot.exists()) {
@@ -89,9 +108,10 @@ export const approveOrderRequest = async (
       );
     }
 
-    [migrationSnapshot, priceBookSnapshot] = await Promise.all([
+    [migrationSnapshot, priceBookSnapshot, paymentSelectionSnapshot] = await Promise.all([
       getDoc(doc(database, "menuControl", "migration")),
       getDoc(doc(database, "menuControl", "current")),
+      getDoc(paymentSelectionRef),
     ]);
   } catch (error) {
     if (isPermissionDenied(error)) {
@@ -121,6 +141,18 @@ export const approveOrderRequest = async (
   }
 
   const currentRequest = requestSnapshot.data();
+  if (
+    !paymentSelectionSnapshot.exists()
+    || paymentSelectionSnapshot.data().requestId !== requestId
+    || paymentSelectionSnapshot.data().customerId !== currentRequest.customerId
+    || !["cash", "qr"].includes(paymentSelectionSnapshot.data().method)
+    || !["advance", "pay_later"].includes(paymentSelectionSnapshot.data().timing)
+  ) {
+    return failed(
+      "failed-precondition",
+      "The selected payment method is unavailable or invalid for this request.",
+    );
+  }
   const priceBook = priceBookSnapshot.data();
   if (
     !priceBook
@@ -215,9 +247,28 @@ export const approveOrderRequest = async (
     });
   }
 
-  const currentPricing = getApprovalPricing(currentRequest, menuItemsById);
+  const currentPricing = getOrderApprovalPricing(
+    currentRequest,
+    menuItemsById,
+    getApprovalPricing,
+  );
   for (const error of currentPricing.errors) {
     return failed("failed-precondition", error);
+  }
+  const paymentSelection = paymentSelectionSnapshot.data();
+  if (
+    (paymentSelection.method === "qr" && paymentSelection.timing !== "advance")
+    || (paymentSelection.method === "cash" && paymentSelection.timing !== "pay_later")
+    || (
+      currentRequest.orderType !== "dine-in"
+      && currentPricing.itemsSubtotal >= 500
+      && paymentSelection.method !== "qr"
+    )
+  ) {
+    return failed(
+      "failed-precondition",
+      "This order requires an upfront GCash / QR payment based on its items subtotal.",
+    );
   }
 
   for (const [id, menuItem] of menuItemsById) {
@@ -239,12 +290,32 @@ export const approveOrderRequest = async (
     phone: currentRequest.phone,
     orderType: currentRequest.orderType,
     address: currentRequest.address,
+    ...(currentRequest.orderType === "delivery"
+      ? {
+        deliveryBarangay: currentRequest.deliveryBarangay,
+        deliveryFee: currentPricing.deliveryFee,
+        itemsSubtotal: currentPricing.itemsSubtotal,
+      }
+      : {}),
     ...(Object.hasOwn(currentRequest, "deliveryLocation")
       ? { deliveryLocation: currentRequest.deliveryLocation }
       : {}),
     notes: currentRequest.notes,
     items: currentPricing.orderItems,
     total: currentPricing.total,
+    paymentMethod: paymentSelection.method,
+    paymentTiming: paymentSelection.timing,
+    ...(paymentSelection.method === "qr"
+      && paymentSelection.paymentReference
+      ? {
+        paymentReference: paymentSelection.paymentReference,
+        paymentProofUrl: paymentSelection.paymentProofUrl,
+        paymentStatus: "pending_verification",
+      }
+      : {}),
+    ...(paymentSelection.method === "cash"
+      ? { cashPaymentStatus: "unpaid" }
+      : {}),
     status: "Pending",
     createdAt: serverTimestamp(),
   };
@@ -293,4 +364,54 @@ export const approveOrderRequest = async (
       "Firestore denied the approval. Verify the request, migration state, and price book before retrying.",
     );
   }
+};
+
+const QR_PAYMENT_REVIEW_STATUSES = new Set([
+  "paid",
+  "needs_review",
+  "rejected",
+]);
+
+export const updateQrOrderPaymentStatus = async (
+  database,
+  orderId,
+  reviewerUid,
+  paymentStatus,
+  rejectionReason = "",
+) => {
+  if (
+    typeof orderId !== "string"
+    || !orderId
+    || orderId !== orderId.trim()
+    || orderId.includes("/")
+    || orderId.length > 1500
+    || typeof reviewerUid !== "string"
+    || !reviewerUid
+    || !QR_PAYMENT_REVIEW_STATUSES.has(paymentStatus)
+  ) {
+    throw new Error("GCash payment review details are invalid.");
+  }
+
+  if (paymentStatus === "rejected") {
+    const reason = typeof rejectionReason === "string"
+      ? rejectionReason.trim()
+      : "";
+    const reasonLength = Array.from(reason).length;
+    if (reasonLength < 1 || reasonLength > 500) {
+      const error = new Error(
+        "Enter a rejection reason from 1 to 500 characters.",
+      );
+      error.code = "failed-precondition";
+      throw error;
+    }
+  }
+
+  const timestamp = serverTimestamp();
+  const paymentUpdate = {
+    paymentStatus,
+    paymentStatusUpdatedAt: timestamp,
+    paymentStatusUpdatedBy: reviewerUid,
+  };
+
+  await updateDoc(doc(database, "orders", orderId), paymentUpdate);
 };

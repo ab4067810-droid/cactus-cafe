@@ -22,8 +22,18 @@ const normalizePhoneOrThrow = (phone) => {
 };
 
 export const isPhoneBlocked = async (database, phone) => {
-  const blockedPhone = await getBlockedPhone(database, phone);
-  return blockedPhone !== null;
+  try {
+    const blockedPhone = await getBlockedPhone(database, phone);
+    return blockedPhone !== null;
+  } catch (error) {
+    if (
+      error?.code === "permission-denied"
+      || error?.code === "firestore/permission-denied"
+    ) {
+      return true;
+    }
+    throw error;
+  }
 };
 
 export const getBlockedPhone = async (database, phone) => {

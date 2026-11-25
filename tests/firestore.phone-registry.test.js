@@ -76,10 +76,30 @@ const makeReservation = (overrides = {}) => ({
   amountPaidNow: 100,
   remainingBalance: 0,
   paymentMethod: "qr",
-  paymentReference: "TEST-REF-001",
+  paymentReference: "TESTREF001",
+  paymentProofUrl: "data:image/jpeg;base64,/9j/2Q==",
   paymentStatus: "pending_review",
   ...overrides,
 });
+
+const createReservationWithReference = async (
+  database,
+  path,
+  reservation,
+) => {
+  const batch = writeBatch(database);
+  batch.set(
+    doc(database, `paymentReferences/${reservation.paymentReference}`),
+    {
+      normalizedReference: reservation.paymentReference,
+      sourceType: "reservation",
+      createdBy: reservation.userId,
+      createdAt: serverTimestamp(),
+    },
+  );
+  batch.set(doc(database, path), reservation);
+  await batch.commit();
+};
 
 const seedBlockedCustomerPhone = async (customerUid = "customer-1") => {
   await testEnv.withSecurityRulesDisabled(async (context) => {
@@ -332,13 +352,25 @@ describe("phone registry rules", () => {
     );
   });
 
-  it("allows specific signed-in reads but denies listing", async () => {
-    const database = testEnv.authenticatedContext("customer-2").firestore();
+  it("allows owners and admins to read registry mappings but denies foreign reads and listing", async () => {
+    const ownerDatabase = testEnv.authenticatedContext(
+      "customer-1",
+    ).firestore();
+    const foreignDatabase = testEnv.authenticatedContext(
+      "customer-2",
+    ).firestore();
+    const adminDatabase = testEnv.authenticatedContext("admin-1").firestore();
 
     await assertSucceeds(
-      getDoc(doc(database, `phoneRegistry/${normalizedPhone}`)),
+      getDoc(doc(ownerDatabase, `phoneRegistry/${normalizedPhone}`)),
     );
-    await assertFails(getDocs(collection(database, "phoneRegistry")));
+    await assertFails(
+      getDoc(doc(foreignDatabase, `phoneRegistry/${normalizedPhone}`)),
+    );
+    await assertSucceeds(
+      getDoc(doc(adminDatabase, `phoneRegistry/${normalizedPhone}`)),
+    );
+    await assertFails(getDocs(collection(ownerDatabase, "phoneRegistry")));
   });
 
   it("prevents another account from claiming an already-owned number", async () => {
@@ -368,6 +400,10 @@ describe("phone registry rules", () => {
     assert.equal(
       (await getDoc(doc(database, `phoneRegistry/${newPhone}`))).data().uid,
       "customer-1",
+    );
+    assert.deepEqual(
+      (await getDoc(doc(database, `phoneClaims/${newPhone}`))).data(),
+      { phone: newPhone },
     );
   });
 
@@ -661,15 +697,20 @@ describe("phone registry rules", () => {
     ).firestore();
 
     await assertSucceeds(
-      setDoc(
-        doc(database, "reservations/valid-phone"),
+      createReservationWithReference(
+        database,
+        "reservations/valid-phone",
         makeReservation(),
       ),
     );
     await assertFails(
-      setDoc(
-        doc(database, "reservations/international-phone"),
-        makeReservation({ phone: "+639171234567" }),
+      createReservationWithReference(
+        database,
+        "reservations/international-phone",
+        makeReservation({
+          phone: "+639171234567",
+          paymentReference: "TESTREF002",
+        }),
       ),
     );
   });
@@ -679,6 +720,16 @@ describe("phone registry rules", () => {
     const customerDatabase = testEnv.authenticatedContext(
       "customer-1",
     ).firestore();
+    const otherCustomerDatabase = testEnv.authenticatedContext(
+      "customer-2",
+    ).firestore();
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), "users/customer-1"), {
+        role: "customer",
+        phone: "09191234567",
+        phoneNumber: "09191234567",
+      });
+    });
 
     await assertSucceeds(
       blockPhone(
@@ -698,6 +749,13 @@ describe("phone registry rules", () => {
       getDoc(doc(customerDatabase, "blockedPhones/09191234567")),
     );
     assert.equal(customerRead.exists(), true);
+    await assertFails(
+      getDoc(doc(otherCustomerDatabase, "blockedPhones/09191234567")),
+    );
+    assert.equal(
+      await isPhoneBlocked(otherCustomerDatabase, "09191234567"),
+      true,
+    );
     await assertFails(listBlockedPhones(customerDatabase));
     const blockedPhone = (
       await getDoc(doc(adminDatabase, "blockedPhones/09191234567"))
@@ -738,8 +796,9 @@ describe("phone registry rules", () => {
       setDoc(doc(database, "orderRequests/blocked-phone"), makeRequest()),
     );
     await assertFails(
-      setDoc(
-        doc(database, "reservations/blocked-phone"),
+      createReservationWithReference(
+        database,
+        "reservations/blocked-phone",
         makeReservation(),
       ),
     );

@@ -1,8 +1,42 @@
+/*
+  Cactus Café — Favorites
+  Palette proportions: ~60% cream, ~30% cactus green, ~5% coral, ~5% pale yellow.
+  Visual styling only: every selector/className from the original is kept.
+*/
+
 .favorites-page {
+  --fav-cream: #eee2cb;
+  --fav-surface: #fbf6ea;
+  --fav-field: #fdfaf2;
+  --fav-soft: #f4ead6;
+  --fav-border: #dccfb0;
+  --fav-border-strong: #c9b98f;
+
+  --fav-green: #1b4532;
+  --fav-green-dark: #12311f;
+  --fav-green-soft: #e3e6cd;
+  --fav-muted: #55604b;
+
+  --fav-coral: #ee4129;
+  --fav-coral-ink: #b3301c;
+  --fav-coral-soft: #fbe6dc;
+  --fav-coral-border: #ee9a86;
+
+  --fav-yellow: #fcfca7;
+  --fav-yellow-border: #e3df7a;
+  --fav-yellow-ink: #5a5314;
+
+  --fav-shadow:
+    0 8px 24px rgb(27 69 50 / 0.08),
+    0 1px 4px rgb(27 69 50 / 0.05);
+  --fav-serif:
+    "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia,
+    serif;
+
   min-height: calc(100vh - 76px);
   padding: clamp(32px, 5vw, 64px) clamp(18px, 5vw, 72px) 80px;
-  background: #f7f9f6;
-  color: #27382d;
+  background: var(--fav-cream);
+  color: var(--fav-green);
   font-family:
     Inter,
     ui-sans-serif,
@@ -25,29 +59,32 @@
 
 .favorites-header {
   max-width: 680px;
-  margin: 0 auto 34px;
+  margin: 0 auto 38px;
   text-align: center;
 }
 
 .favorites-eyebrow {
   margin: 0 0 10px;
-  color: #28734a;
-  font-size: 11px;
-  font-weight: 850;
-  letter-spacing: 0.14em;
+  color: var(--fav-coral-ink);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
 }
 
 .favorites-header h1 {
   margin: 0;
-  color: #26372c;
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: clamp(2.2rem, 6vw, 3.2rem);
-  letter-spacing: -0.05em;
+  color: var(--fav-green);
+  font-family: var(--fav-serif);
+  font-size: clamp(2.2rem, 6vw, 3.4rem);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+  text-wrap: balance;
 }
 
 .favorites-header > p:last-child {
-  margin: 12px 0 0;
-  color: #667169;
+  margin: 14px 0 0;
+  color: var(--fav-muted);
   font-size: 15px;
   line-height: 1.6;
 }
@@ -55,7 +92,7 @@
 .favorites-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 20px;
+  gap: 22px;
 }
 
 .favorite-card {
@@ -64,17 +101,19 @@
   min-width: 0;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid #e1e8e1;
-  border-radius: 17px;
-  background: #fff;
-  box-shadow: 0 8px 26px rgba(34, 55, 39, 0.07);
+  border: 1px solid var(--fav-border);
+  border-radius: 20px;
+  background: var(--fav-surface);
+  box-shadow: var(--fav-shadow);
   transition:
     box-shadow 180ms ease,
-    transform 180ms ease;
+    transform 180ms ease,
+    border-color 180ms ease;
 }
 
 .favorite-card:hover {
-  box-shadow: 0 14px 32px rgba(34, 55, 39, 0.11);
+  border-color: var(--fav-border-strong);
+  box-shadow: 0 14px 30px rgb(27 69 50 / 0.14);
   transform: translateY(-2px);
 }
 
@@ -84,11 +123,11 @@
   aspect-ratio: 4 / 3;
   place-items: center;
   object-fit: cover;
-  background: #edf4ef;
+  background: var(--fav-green-soft);
 }
 
 .favorite-image-placeholder {
-  color: #28734a;
+  color: var(--fav-green);
   font-size: 38px;
 }
 
@@ -100,12 +139,22 @@
   width: 42px;
   height: 42px;
   place-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--fav-border);
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.96);
-  color: #dc3545;
-  box-shadow: 0 3px 12px rgba(27, 39, 30, 0.16);
+  background: var(--fav-surface);
+  color: var(--fav-coral);
+  box-shadow: 0 3px 12px rgb(27 69 50 / 0.18);
   cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.favorite-remove-button:hover:not(:disabled) {
+  border-color: var(--fav-coral-border);
+  background: var(--fav-coral-soft);
+  transform: scale(1.06);
 }
 
 .favorite-remove-button svg {
@@ -132,27 +181,33 @@
 }
 
 .favorite-card-category {
-  margin: 0 0 7px;
-  color: #28734a;
-  font-size: 10px;
-  font-weight: 850;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
+  align-self: flex-start;
+  margin: 0 0 9px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--fav-yellow);
+  color: var(--fav-yellow-ink);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  line-height: 1.4;
 }
 
 .favorite-card-content h2 {
   margin: 0;
-  color: #26372c;
-  font-size: 17px;
-  letter-spacing: -0.025em;
-  line-height: 1.35;
+  color: var(--fav-green);
+  font-family: var(--fav-serif);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.3;
   overflow-wrap: anywhere;
 }
 
 .favorite-card-description {
   min-height: 3.2em;
   margin: 8px 0 16px;
-  color: #667169;
+  color: var(--fav-muted);
   font-size: 13px;
   line-height: 1.6;
   overflow-wrap: anywhere;
@@ -165,12 +220,13 @@
   gap: 10px;
   margin-top: auto;
   padding-top: 14px;
-  border-top: 1px solid #edf0ec;
+  border-top: 1.5px dashed var(--fav-border-strong);
 }
 
 .favorite-card-footer > strong {
-  color: #205c3a;
-  font-size: 16px;
+  color: var(--fav-green);
+  font-family: var(--fav-serif);
+  font-size: 18px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -181,33 +237,35 @@
   min-height: 44px;
   align-items: center;
   justify-content: center;
-  padding: 0 15px;
-  border: 1px solid #28734a;
-  border-radius: 9px;
-  background: #28734a;
-  color: #fff;
+  padding: 0 16px;
+  border: 1px solid var(--fav-green);
+  border-radius: 999px;
+  background: var(--fav-green);
+  color: var(--fav-surface);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 800;
   text-decoration: none;
   cursor: pointer;
   transition:
     background-color 160ms ease,
     border-color 160ms ease,
+    box-shadow 160ms ease,
     transform 160ms ease;
 }
 
 .favorites-add-button:hover:not(:disabled),
 .favorites-primary-link:hover {
-  border-color: #205c3a;
-  background: #205c3a;
+  border-color: var(--fav-green-dark);
+  background: var(--fav-green-dark);
+  box-shadow: 0 8px 18px rgb(27 69 50 / 0.26);
   transform: translateY(-1px);
 }
 
 .favorites-add-button:disabled {
-  border-color: #dfe4df;
-  background: #eef0ed;
-  color: #788078;
+  border-color: var(--fav-border);
+  background: var(--fav-soft);
+  color: var(--fav-muted);
   cursor: not-allowed;
 }
 
@@ -219,30 +277,101 @@
   width: min(560px, 100%);
   margin: 48px auto;
   padding: clamp(26px, 5vw, 42px);
-  border: 1px solid #e1e8e1;
-  border-radius: 18px;
-  background: #fff;
-  box-shadow: 0 8px 26px rgba(34, 55, 39, 0.06);
+  border: 1px solid var(--fav-border);
+  border-radius: 22px;
+  background: var(--fav-surface);
+  box-shadow: var(--fav-shadow);
   text-align: center;
+}
+
+.favorite-skeleton-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--fav-border);
+  border-radius: 20px;
+  background: var(--fav-surface);
+  box-shadow: var(--fav-shadow);
+}
+
+.favorite-skeleton-image,
+.favorite-skeleton-line {
+  display: block;
+  background: linear-gradient(90deg, #e6d9bd 20%, #f4ead6 50%, #e6d9bd 80%);
+  background-size: 200% 100%;
+  animation: favorites-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+.favorite-skeleton-image {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+}
+
+.favorite-skeleton-content {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 180px;
+  padding: 20px;
+}
+
+.favorite-skeleton-line {
+  height: 12px;
+  border-radius: 999px;
+}
+
+.favorite-skeleton-category {
+  width: 32%;
+}
+
+.favorite-skeleton-title {
+  width: 68%;
+  height: 18px;
+}
+
+.favorite-skeleton-description {
+  width: 82%;
+}
+
+.favorite-skeleton-footer {
+  width: 100%;
+  height: 34px;
+  margin-top: auto;
+  border-radius: 999px;
+}
+
+@keyframes favorites-skeleton-shimmer {
+  to {
+    background-position: -200% 0;
+  }
 }
 
 .favorites-empty h1,
 .favorites-empty h2 {
   margin: 0;
-  color: #26372c;
-  font-size: clamp(1.35rem, 4vw, 1.7rem);
+  color: var(--fav-green);
+  font-family: var(--fav-serif);
+  font-size: clamp(1.4rem, 4vw, 1.8rem);
+  letter-spacing: -0.02em;
 }
 
 .favorites-empty p {
   margin: 0 0 5px;
-  color: #667169;
+  color: var(--fav-muted);
   font-size: 14px;
   line-height: 1.55;
 }
 
 .favorites-empty-heart {
-  color: #dc3545;
-  font-size: 38px;
+  display: grid;
+  width: 68px;
+  height: 68px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--fav-yellow);
+  color: var(--fav-coral);
+  font-size: 34px;
   line-height: 1;
 }
 
@@ -253,10 +382,10 @@
   gap: 14px;
   margin: 0 0 22px;
   padding: 12px 15px;
-  border: 1px solid #e8c5bd;
+  border: 1px solid var(--fav-coral-border);
   border-radius: 12px;
-  background: #fff2ef;
-  color: #963b2d;
+  background: var(--fav-coral-soft);
+  color: var(--fav-coral-ink);
   font-size: 13px;
 }
 
@@ -267,22 +396,26 @@
 .favorites-error button {
   min-height: 38px;
   flex: 0 0 auto;
-  padding: 0 13px;
-  border: 1px solid #d8aaa2;
-  border-radius: 8px;
-  background: #fff;
-  color: #873b34;
+  padding: 0 14px;
+  border: 1.5px solid var(--fav-coral-ink);
+  border-radius: 999px;
+  background: var(--fav-surface);
+  color: var(--fav-coral-ink);
   font: inherit;
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 800;
   cursor: pointer;
+}
+
+.favorites-error button:hover {
+  background: #fff;
 }
 
 .favorites-add-button:focus-visible,
 .favorites-primary-link:focus-visible,
 .favorite-remove-button:focus-visible,
 .favorites-error button:focus-visible {
-  outline: 3px solid rgba(40, 115, 74, 0.3);
+  outline: 3px solid var(--fav-coral);
   outline-offset: 3px;
 }
 
@@ -312,7 +445,18 @@
     grid-template-columns: minmax(105px, 0.8fr) minmax(0, 1.2fr);
   }
 
+  .favorite-skeleton-card {
+    display: grid;
+    grid-template-columns: minmax(105px, 0.8fr) minmax(0, 1.2fr);
+  }
+
   .favorite-card-image {
+    height: 100%;
+    min-height: 180px;
+    aspect-ratio: auto;
+  }
+
+  .favorite-skeleton-image {
     height: 100%;
     min-height: 180px;
     aspect-ratio: auto;
@@ -343,7 +487,15 @@
     grid-template-columns: minmax(86px, 0.7fr) minmax(0, 1.3fr);
   }
 
+  .favorite-skeleton-card {
+    grid-template-columns: minmax(86px, 0.7fr) minmax(0, 1.3fr);
+  }
+
   .favorite-card-content {
+    padding: 12px;
+  }
+
+  .favorite-skeleton-content {
     padding: 12px;
   }
 
@@ -368,8 +520,14 @@
 
 @media (prefers-reduced-motion: reduce) {
   .favorite-card,
+  .favorite-remove-button,
   .favorites-add-button,
   .favorites-primary-link {
     transition: none;
+  }
+
+  .favorite-skeleton-image,
+  .favorite-skeleton-line {
+    animation: none;
   }
 }

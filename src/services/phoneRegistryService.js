@@ -33,38 +33,64 @@ const normalizePhoneOrThrow = (phone) => {
   throw error;
 };
 
+const getProfilePhone = (profile) => normalizePHPhone(
+  profile.phoneNumber || profile.phone || "",
+);
+
+const isPermissionDenied = (error) => error?.code === "permission-denied"
+  || error?.code === "firestore/permission-denied";
+
 export const claimPhoneForUser = async (database, userId, phone) => {
   const normalizedPhone = normalizePhoneOrThrow(phone);
   const userRef = doc(database, "users", userId);
   const phoneRef = doc(database, "phoneRegistry", normalizedPhone);
+  const phoneClaimRef = doc(database, "phoneClaims", normalizedPhone);
 
   await runTransaction(database, async (transaction) => {
-    const [phoneSnapshot, userSnapshot] = await Promise.all([
-      transaction.get(phoneRef),
+    const [phoneClaimSnapshot, userSnapshot] = await Promise.all([
+      transaction.get(phoneClaimRef),
       transaction.get(userRef),
     ]);
 
-    if (
-      phoneSnapshot.exists()
-      && phoneSnapshot.data().uid !== userId
-    ) {
+    if (!userSnapshot.exists()) {
+      const error = new Error("Customer profile could not be found.");
+      error.code = "profile/not-found";
+      throw error;
+    }
+
+    const profile = userSnapshot.data();
+    const storedPhone = String(
+      profile.phoneNumber || profile.phone || "",
+    ).trim();
+    const userPhone = getProfilePhone(profile);
+    if (userPhone && userPhone !== normalizedPhone) {
+      const error = new Error(
+        "The phone number does not match the customer's saved profile.",
+      );
+      error.code = "phone/profile-mismatch";
+      throw error;
+    }
+    if (storedPhone && storedPhone !== normalizedPhone) {
+      const error = new Error(
+        "Save the phone number in normalized Philippine mobile format before claiming it.",
+      );
+      error.code = "phone/profile-mismatch";
+      throw error;
+    }
+    if (phoneClaimSnapshot.exists() && userPhone !== normalizedPhone) {
       throw createPhoneConflictError();
     }
 
-    if (!phoneSnapshot.exists()) {
-      transaction.set(phoneRef, {
-        uid: userId,
-        phone: normalizedPhone,
-        updatedAt: serverTimestamp(),
-      });
+    transaction.set(phoneRef, {
+      uid: userId,
+      phone: normalizedPhone,
+      updatedAt: serverTimestamp(),
+    });
+    if (!phoneClaimSnapshot.exists()) {
+      transaction.set(phoneClaimRef, { phone: normalizedPhone });
     }
 
-    if (
-      userSnapshot.exists()
-      && !String(
-        userSnapshot.data().phoneNumber || userSnapshot.data().phone || "",
-      ).trim()
-    ) {
+    if (!storedPhone) {
       transaction.update(userRef, {
         phone: normalizedPhone,
         phoneNumber: normalizedPhone,
@@ -85,6 +111,7 @@ export const saveCustomerProfileWithPhone = async (
   const normalizedPhone = normalizePhoneOrThrow(phone);
   const userRef = doc(database, "users", userId);
   const newPhoneRef = doc(database, "phoneRegistry", normalizedPhone);
+  const newPhoneClaimRef = doc(database, "phoneClaims", normalizedPhone);
   let saveStage = "starting profile transaction";
 
   try {
@@ -98,12 +125,7 @@ export const saveCustomerProfileWithPhone = async (
       }
 
       const userProfile = userSnapshot.data();
-      const storedPhone = String(
-        userProfile.phoneNumber || userProfile.phone || "",
-      ).trim();
-      const previousPhone = normalizePHPhone(
-        storedPhone,
-      );
+      const previousPhone = getProfilePhone(userProfile);
       const phoneChanged = previousPhone !== normalizedPhone
         || (
           userProfile.phone
@@ -126,36 +148,62 @@ export const saveCustomerProfileWithPhone = async (
       const previousPhoneRef = previousPhone
         ? doc(database, "phoneRegistry", previousPhone)
         : null;
-      const phoneRefs = previousPhoneRef && previousPhone !== normalizedPhone
-        ? [newPhoneRef, previousPhoneRef]
-        : [newPhoneRef];
-      saveStage = "reading phoneRegistry entries";
-      const phoneSnapshots = await Promise.all(
-        phoneRefs.map((phoneRef) => transaction.get(phoneRef)),
+      const previousPhoneClaimRef = previousPhone
+        ? doc(database, "phoneClaims", previousPhone)
+        : null;
+      saveStage = "checking phoneClaims entries";
+      const claimRefs = [
+        newPhoneClaimRef,
+        ...(previousPhoneClaimRef && previousPhone !== normalizedPhone
+          ? [previousPhoneClaimRef]
+          : []),
+        ...(previousPhoneRef && previousPhone !== normalizedPhone
+          ? [previousPhoneRef]
+          : []),
+      ];
+      const claimSnapshots = await Promise.all(
+        claimRefs.map((claimRef) => transaction.get(claimRef)),
       );
-      const newPhoneSnapshot = phoneSnapshots[0];
+      const newPhoneClaimSnapshot = claimSnapshots[0];
+      const previousPhoneClaimSnapshot = previousPhoneClaimRef
+        && previousPhone !== normalizedPhone
+        ? claimSnapshots[1]
+        : null;
+      const previousPhoneRegistrySnapshot = previousPhoneRef
+        && previousPhone !== normalizedPhone
+        ? claimSnapshots[previousPhoneClaimSnapshot ? 2 : 1]
+        : null;
 
-      if (
-        newPhoneSnapshot.exists()
-        && newPhoneSnapshot.data().uid !== userId
-      ) {
+      if (newPhoneClaimSnapshot.exists() && previousPhone !== normalizedPhone) {
         throw createPhoneConflictError();
       }
 
-      saveStage = "writing phoneRegistry and users/{uid}";
+      saveStage = "writing phone claims and users/{uid}";
       transaction.set(newPhoneRef, {
         uid: userId,
         phone: normalizedPhone,
         updatedAt: serverTimestamp(),
       });
+      if (!newPhoneClaimSnapshot.exists()) {
+        transaction.set(newPhoneClaimRef, { phone: normalizedPhone });
+      }
 
       if (
         previousPhoneRef
         && previousPhone !== normalizedPhone
-        && phoneSnapshots[1].exists()
-        && phoneSnapshots[1].data().uid === userId
       ) {
-        transaction.delete(previousPhoneRef);
+        const ownsPreviousRegistry = previousPhoneRegistrySnapshot?.exists()
+          && previousPhoneRegistrySnapshot.data().uid === userId;
+        if (ownsPreviousRegistry) transaction.delete(previousPhoneRef);
+        if (
+          previousPhoneClaimSnapshot?.exists()
+          && (
+            !previousPhoneRegistrySnapshot?.exists()
+            || ownsPreviousRegistry
+          )
+        ) {
+          transaction.delete(previousPhoneClaimRef);
+        }
       }
 
       transaction.update(userRef, {
@@ -176,7 +224,12 @@ export const saveCustomerProfileWithPhone = async (
     ) {
       throw error;
     }
-
+    if (
+      isPermissionDenied(error)
+      && saveStage === "checking blockedPhones/{phone}"
+    ) {
+      throw createBlockedPhoneError();
+    }
     const profileSaveError = new Error(
       error?.message || "Customer profile save failed.",
     );

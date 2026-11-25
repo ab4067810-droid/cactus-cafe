@@ -677,10 +677,18 @@ function MenuPage() {
     return (
       <>
         <main className="menu-page">
-          <section className="menu-header menu-header-loading">
+          <section
+            className="menu-header menu-header-loading"
+            role="status"
+            aria-busy="true"
+            aria-label="Loading the menu"
+          >
             <p className="menu-eyebrow">CACTUS CAFE MENU</p>
             <h1>Good things are on the way.</h1>
-            <p>We’re getting today’s menu ready for you.</p>
+            <div className="menu-header-skeleton-copy" aria-hidden="true">
+              <span />
+              <span />
+            </div>
           </section>
 
           <section className="menu-grid loading-grid">

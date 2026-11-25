@@ -219,9 +219,28 @@ function HomePage() {
           </div>
 
           {menuLoading ? (
-            <p className="featured-menu-message" role="status">
-              Loading featured menu...
-            </p>
+            <div
+              className="featured-menu-grid featured-menu-skeleton-grid"
+              role="status"
+              aria-label="Loading featured menu"
+              aria-busy="true"
+            >
+              {[1, 2, 3].map((item) => (
+                <article
+                  className="featured-menu-card featured-menu-skeleton-card"
+                  key={item}
+                  aria-hidden="true"
+                >
+                  <div className="featured-menu-image home-skeleton-image" />
+                  <div className="featured-menu-copy">
+                    <span className="home-skeleton-shape home-skeleton-category" />
+                    <span className="home-skeleton-shape home-skeleton-title" />
+                    <span className="home-skeleton-shape home-skeleton-description" />
+                    <span className="home-skeleton-shape home-skeleton-price" />
+                  </div>
+                </article>
+              ))}
+            </div>
           ) : menuError ? (
             <p className="featured-menu-message" role="alert">
               The menu could not be loaded right now.
@@ -279,9 +298,25 @@ function HomePage() {
           </div>
 
           {reviewsLoading ? (
-            <p className="reviews-message" role="status">
-              Loading reviews...
-            </p>
+            <div
+              className="public-review-grid public-review-skeleton-grid"
+              role="status"
+              aria-label="Loading customer reviews"
+              aria-busy="true"
+            >
+              {[1, 2, 3].map((item) => (
+                <article
+                  className="public-review public-review-skeleton-card"
+                  key={item}
+                  aria-hidden="true"
+                >
+                  <span className="home-skeleton-shape home-skeleton-rating" />
+                  <span className="home-skeleton-shape home-skeleton-quote" />
+                  <span className="home-skeleton-shape home-skeleton-quote home-skeleton-quote-short" />
+                  <span className="home-skeleton-shape home-skeleton-byline" />
+                </article>
+              ))}
+            </div>
           ) : reviewsError ? (
             <div className="reviews-message" role="alert">
               <p>Reviews could not be loaded right now.</p>

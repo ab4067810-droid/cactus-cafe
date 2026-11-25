@@ -1,22 +1,30 @@
-:root {
-  --about-page: #f7f8f2;
-  --about-surface: #fff;
-  --about-soft: #edf2e8;
-  --about-ink: #1d2b22;
-  --about-muted: #657269;
-  --about-green: #3d6948;
-  --about-green-dark: #2b5036;
-  --about-border: #dce4d9;
-  --about-shadow: 0 20px 55px rgb(34 57 39 / 9%);
-}
+/* ==========================================================================
+   Cactus Café – About
+   Same palette as Home and Menu, scoped to .about-page:
+   ~60% cream · ~30% cactus green · ~5% coral · ~5% pale yellow
+   Contrast: green on cream 8.4:1, ink on cream >12:1, muted on cream 5.7:1,
+   cream on green 8.4:1, green on yellow >10:1. Coral (#EE4129) is ~3:1 on
+   cream, so it is only used for shapes and one large bold glyph, never body text.
+   ========================================================================== */
 
 .about-page {
+  --about-page: #eee2cb;
+  --about-surface: #f8f1e2;
+  --about-soft: #e6d8bb;
+  --about-ink: #16261d;
+  --about-muted: #4a5a4f;
+  --about-green: #1b4532;
+  --about-green-dark: #123325;
+  --about-hill: #3b6e55;
+  --about-border: #d3c3a0;
+  --about-coral: #ee4129;
+  --about-yellow: #fcfca7;
+  --about-on-green: #e4eadf;
+
   min-height: 100vh;
   overflow: hidden;
   padding: 28px clamp(18px, 5vw, 76px) 76px;
-  background:
-    radial-gradient(ellipse at 92% 4%, rgb(219 234 214 / 60%), transparent 32rem),
-    var(--about-page);
+  background: var(--about-page);
   color: var(--about-ink);
   font-family:
     Inter,
@@ -39,6 +47,8 @@
   margin-inline: auto;
 }
 
+/* ---------- Hero ---------- */
+
 .about-hero {
   display: grid;
   min-height: 570px;
@@ -51,19 +61,21 @@
 .about-eyebrow {
   margin: 0 0 13px;
   color: var(--about-green);
-  font-size: 10px;
-  font-weight: 850;
-  letter-spacing: 0.16em;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
   line-height: 1.4;
 }
 
 .about-hero h1 {
   max-width: 700px;
   margin: 0;
+  color: var(--about-green);
+  font-family: Georgia, "Times New Roman", serif;
   font-size: clamp(3.2rem, 7vw, 6rem);
-  font-weight: 780;
-  letter-spacing: -0.075em;
-  line-height: 0.98;
+  font-weight: 500;
+  letter-spacing: -0.04em;
+  line-height: 1;
   text-wrap: balance;
 }
 
@@ -83,17 +95,19 @@
   margin-top: 30px;
 }
 
+/* Buttons */
+
 .about-button {
   display: inline-flex;
-  min-height: 47px;
+  min-height: 48px;
   align-items: center;
   justify-content: center;
   gap: 9px;
-  padding: 0 19px;
+  padding: 0 22px;
   border: 1px solid transparent;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 800;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 700;
   transition:
     background 160ms ease,
     border-color 160ms ease,
@@ -106,28 +120,32 @@
 }
 
 .about-button-primary {
+  border-color: var(--about-green);
   background: var(--about-green);
-  color: #fff;
+  color: var(--about-surface);
 }
 
 .about-button-primary:hover {
+  border-color: var(--about-green-dark);
   background: var(--about-green-dark);
 }
 
 .about-button-secondary {
-  border-color: var(--about-border);
-  background: var(--about-surface);
-  color: var(--about-ink);
+  border-color: var(--about-green);
+  background: transparent;
+  color: var(--about-green);
 }
 
 .about-button-secondary:hover {
-  border-color: var(--about-green);
+  background: var(--about-yellow);
   color: var(--about-green-dark);
 }
 
 .about-button span {
   font-size: 16px;
 }
+
+/* Hero card: a coral sun over cactus-green hills */
 
 .about-hero-note {
   position: relative;
@@ -136,13 +154,12 @@
   align-items: flex-end;
   gap: 15px;
   overflow: hidden;
-  padding: 27px;
-  border: 1px solid #d5e2d2;
-  border-radius: 30px;
+  padding: 24px;
+  border: 1px solid var(--about-border);
+  border-radius: 28px;
   background:
-    radial-gradient(circle at 75% 28%, #e8c77d 0 46px, transparent 47px),
-    linear-gradient(145deg, #e6efe1, #f8f4e9 62%, #d8e6d5);
-  box-shadow: var(--about-shadow);
+    radial-gradient(circle at 75% 28%, var(--about-coral) 0 46px, transparent 47px),
+    var(--about-soft);
 }
 
 .about-hero-note::before,
@@ -153,7 +170,7 @@
   left: -9%;
   height: 190px;
   border-radius: 50% 50% 0 0;
-  background: #7d9a72;
+  background: var(--about-hill);
   content: "";
   transform: rotate(-7deg);
 }
@@ -179,29 +196,33 @@
   height: 48px;
   flex: 0 0 auto;
   place-items: center;
-  border-radius: 15px;
-  background: var(--about-green);
-  color: #fff;
+  border-radius: 14px;
+  background: var(--about-yellow);
+  color: var(--about-green);
   font-size: 22px;
-  font-weight: 850;
+  font-weight: 800;
 }
 
 .about-hero-note > div {
-  padding-bottom: 3px;
+  padding: 10px 15px;
+  border-radius: 12px;
+  background: var(--about-surface);
 }
 
 .about-hero-note .about-eyebrow {
-  margin-bottom: 5px;
-  color: var(--about-green-dark);
-  font-size: 8px;
+  margin-bottom: 3px;
+  color: var(--about-muted);
+  font-size: 11px;
 }
 
 .about-hero-note > div > p:last-child {
   margin: 0;
-  color: var(--about-green-dark);
+  color: var(--about-green);
   font-size: 15px;
-  font-weight: 800;
+  font-weight: 700;
 }
+
+/* ---------- Sections ---------- */
 
 .about-section {
   padding-block: 82px;
@@ -212,10 +233,12 @@
 .about-owner-copy h2,
 .about-cta h2 {
   margin: 0;
+  color: var(--about-green);
+  font-family: Georgia, "Times New Roman", serif;
   font-size: clamp(2rem, 4.2vw, 3.5rem);
-  font-weight: 760;
-  letter-spacing: -0.065em;
-  line-height: 1.04;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1.08;
   text-wrap: balance;
 }
 
@@ -240,13 +263,15 @@
 .about-owner-bio {
   margin: 0;
   color: var(--about-muted);
-  font-size: 15px;
+  font-size: 16px;
   line-height: 1.8;
 }
 
 .about-story-copy p + p {
   margin-top: 17px;
 }
+
+/* ---------- Owner ---------- */
 
 .about-owner {
   display: grid;
@@ -257,11 +282,11 @@
 
 .about-owner-photo {
   display: block;
-  width: 100%;
+  width: calc(100% - 12px);
   aspect-ratio: 4 / 3.6;
-  border-radius: 25px;
+  border-radius: 200px 200px 22px 22px;
   object-fit: cover;
-  box-shadow: var(--about-shadow);
+  box-shadow: 12px 12px 0 var(--about-green);
 }
 
 .about-image-placeholder {
@@ -271,13 +296,17 @@
   align-items: center;
   justify-content: center;
   gap: 10px;
-  border: 1px dashed #b9cbb7;
-  border-radius: 25px;
-  background:
-    radial-gradient(circle at 50% 42%, #f8fbf6, transparent 48%),
-    var(--about-soft);
+  border: 1px dashed var(--about-green);
+  border-radius: 20px;
+  background: var(--about-soft);
   color: var(--about-green);
   text-align: center;
+}
+
+.about-owner .about-image-placeholder {
+  width: calc(100% - 12px);
+  border-radius: 200px 200px 22px 22px;
+  box-shadow: 12px 12px 0 var(--about-green);
 }
 
 .about-image-placeholder span {
@@ -286,7 +315,7 @@
 
 .about-image-placeholder small {
   color: var(--about-muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -297,18 +326,21 @@
 .about-owner-position {
   margin: 0 0 5px;
   color: var(--about-green);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
 
 .about-owner-copy h3 {
   margin: 0 0 15px;
-  font-size: 23px;
-  font-weight: 750;
-  letter-spacing: -0.04em;
+  color: var(--about-green);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
+
+/* ---------- Purpose ---------- */
 
 .about-purpose {
   display: grid;
@@ -328,14 +360,14 @@
   padding: 26px;
   overflow: hidden;
   border: 1px solid var(--about-border);
-  border-radius: 20px;
+  border-radius: 18px;
   background: var(--about-surface);
 }
 
 .about-purpose-card-green {
   border-color: var(--about-green);
   background: var(--about-green);
-  color: #fff;
+  color: var(--about-surface);
 }
 
 .about-purpose-card .about-eyebrow {
@@ -343,28 +375,34 @@
 }
 
 .about-purpose-card-green .about-eyebrow {
-  color: #d5e8d5;
+  color: var(--about-yellow);
 }
 
 .about-card-index {
   position: absolute;
   top: 20px;
   right: 24px;
-  color: #a7b6a5;
-  font-size: 12px;
-  font-weight: 800;
+  color: var(--about-muted);
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .about-purpose-card-green .about-card-index {
-  color: #bdd2bd;
+  color: var(--about-on-green);
 }
 
 .about-purpose-card h3,
 .about-value-card h3 {
   margin: 0 0 10px;
-  font-size: 21px;
-  font-weight: 750;
-  letter-spacing: -0.04em;
+  color: var(--about-green);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.about-purpose-card-green h3 {
+  color: var(--about-surface);
 }
 
 .about-purpose-card > p:last-child {
@@ -372,8 +410,10 @@
 }
 
 .about-purpose-card-green > p:last-child {
-  color: #e3ede1;
+  color: var(--about-on-green);
 }
+
+/* ---------- Values ---------- */
 
 .about-values-grid {
   display: grid;
@@ -386,7 +426,7 @@
   min-height: 200px;
   padding: 24px;
   border: 1px solid var(--about-border);
-  border-radius: 19px;
+  border-radius: 16px;
   background: var(--about-surface);
 }
 
@@ -397,19 +437,21 @@
   margin-bottom: 25px;
   place-items: center;
   border-radius: 12px;
-  background: var(--about-soft);
+  background: var(--about-yellow);
   color: var(--about-green);
-  font-size: 11px;
-  font-weight: 850;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .about-value-card h3 {
-  font-size: 18px;
+  font-size: 19px;
 }
 
 .about-value-card > p {
-  font-size: 13px;
+  font-size: 14px;
 }
+
+/* ---------- Gallery ---------- */
 
 .about-gallery-heading {
   display: flex;
@@ -426,7 +468,7 @@
   max-width: 250px;
   margin: 0 0 4px;
   color: var(--about-muted);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.6;
 }
 
@@ -441,7 +483,7 @@
   margin: 0;
   overflow: hidden;
   border: 1px solid var(--about-border);
-  border-radius: 19px;
+  border-radius: 16px;
   background: var(--about-surface);
 }
 
@@ -466,10 +508,12 @@
 
 .about-gallery-item figcaption {
   padding: 15px 17px;
-  color: var(--about-ink);
-  font-size: 12px;
-  font-weight: 750;
+  color: var(--about-green);
+  font-size: 13px;
+  font-weight: 700;
 }
+
+/* ---------- Call to action ---------- */
 
 .about-cta {
   display: flex;
@@ -477,7 +521,8 @@
   justify-content: space-between;
   gap: 30px;
   padding: 38px;
-  border-radius: 24px;
+  border: 1px solid var(--about-border);
+  border-radius: 22px;
   background: var(--about-soft);
 }
 
@@ -488,7 +533,7 @@
 .about-cta > div:first-child > p:last-child {
   margin: 12px 0 0;
   color: var(--about-muted);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.6;
 }
 
@@ -496,6 +541,8 @@
   flex: 0 0 auto;
   margin-top: 0;
 }
+
+/* ---------- Location ---------- */
 
 .about-location {
   display: grid;
@@ -508,7 +555,7 @@
   max-width: 34ch;
   margin: 16px 0 0;
   color: var(--about-muted);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.7;
 }
 
@@ -522,7 +569,7 @@
   min-height: 125px;
   padding: 20px;
   border: 1px solid var(--about-border);
-  border-radius: 17px;
+  border-radius: 16px;
   background: var(--about-surface);
 }
 
@@ -533,8 +580,8 @@
 .about-location-card > p:last-child {
   margin: 0;
   color: var(--about-ink);
-  font-size: 14px;
-  font-weight: 650;
+  font-size: 15px;
+  font-weight: 600;
   line-height: 1.65;
   overflow-wrap: anywhere;
 }
@@ -548,14 +595,17 @@
   align-self: center;
   margin: 0;
   color: var(--about-muted);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.6;
 }
 
-.about-button:focus-visible {
-  outline: 3px solid #d5a74a;
+.about-button:focus-visible,
+.about-page a:focus-visible {
+  outline: 3px solid var(--about-green);
   outline-offset: 4px;
 }
+
+/* ---------- Responsive ---------- */
 
 @media (max-width: 850px) {
   .about-hero {
@@ -613,7 +663,7 @@
 
   .about-hero-note {
     min-height: 270px;
-    border-radius: 23px;
+    border-radius: 22px;
   }
 
   .about-section {
@@ -633,6 +683,13 @@
 
   .about-owner-photo {
     aspect-ratio: 1.15 / 1;
+    border-radius: 120px 120px 18px 18px;
+    box-shadow: 8px 8px 0 var(--about-green);
+  }
+
+  .about-owner .about-image-placeholder {
+    border-radius: 120px 120px 18px 18px;
+    box-shadow: 8px 8px 0 var(--about-green);
   }
 
   .about-purpose-card {
@@ -692,5 +749,10 @@
   .about-button,
   .about-gallery-photo {
     transition: none;
+  }
+
+  .about-button:hover,
+  .about-gallery-item:hover .about-gallery-photo {
+    transform: none;
   }
 }

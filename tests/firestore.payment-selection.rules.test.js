@@ -36,7 +36,7 @@ function makeRequest(customerId = "customer-1", overrides = {}) {
     phone: "09123456789",
     items: [{ id: "coffee", quantity: 2 }],
     orderType: "takeout",
-    address: "",
+    address: "12 Main Street, Barangay 1 Poblacion",
     notes: "",
     status: "pending",
     createdAt: serverTimestamp(),
@@ -126,6 +126,67 @@ describe("payment selection atomic creation", () => {
     );
     assert.equal(selection.data().method, "cash");
     assert.equal(selection.data().timing, "advance");
+  });
+
+  it("allows a GCash QR selection with a 13-digit reference and compressed receipt", async () => {
+    const customerDb = testEnv.authenticatedContext(
+      "customer-1",
+      { email: "customer-1@example.test" },
+    ).firestore();
+    const batch = writeBatch(customerDb);
+    batch.set(
+      doc(customerDb, "orderRequests/gcash-request"),
+      makeRequest("customer-1", {
+        address: "12 Main Street, Barangay 1 Poblacion",
+      }),
+    );
+    batch.set(
+      doc(customerDb, "paymentSelections/gcash-request"),
+      makeSelection("gcash-request", "customer-1", {
+        method: "qr",
+        timing: "advance",
+        paymentReference: "1234567890123",
+        paymentProofUrl: "data:image/jpeg;base64,SGVsbG8=",
+        paymentStatus: "pending_verification",
+      }),
+    );
+    batch.set(
+      doc(customerDb, "paymentReferences/1234567890123"),
+      {
+        normalizedReference: "1234567890123",
+        sourceType: "checkout",
+        createdBy: "customer-1",
+        createdAt: serverTimestamp(),
+      },
+    );
+
+    await assertSucceeds(batch.commit());
+  });
+
+  it("rejects GCash QR selections with a malformed reference number", async () => {
+    const customerDb = testEnv.authenticatedContext(
+      "customer-1",
+      { email: "customer-1@example.test" },
+    ).firestore();
+    const batch = writeBatch(customerDb);
+    batch.set(
+      doc(customerDb, "orderRequests/invalid-gcash-request"),
+      makeRequest("customer-1", {
+        address: "12 Main Street, Barangay 1 Poblacion",
+      }),
+    );
+    batch.set(
+      doc(customerDb, "paymentSelections/invalid-gcash-request"),
+      makeSelection("invalid-gcash-request", "customer-1", {
+        method: "qr",
+        timing: "advance",
+        paymentReference: "1234",
+        paymentProofUrl: "data:image/jpeg;base64,SGVsbG8=",
+        paymentStatus: "pending_verification",
+      }),
+    );
+
+    await assertFails(batch.commit());
   });
 
   it("preserves valid request creation without requiring a payment selection", async () => {

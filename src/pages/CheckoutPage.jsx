@@ -5,6 +5,7 @@ import {
   collection,
   doc,
   getDoc,
+  onSnapshot,
   serverTimestamp,
   writeBatch,
 } from "firebase/firestore";
@@ -17,10 +18,24 @@ import {
   NEGROS_OCCIDENTAL_PROVINCE,
   isWithinIsabelaDeliveryBounds,
 } from "../constants/isabelaAddress";
+import {
+  GCASH_ACCOUNT_NAME,
+  GCASH_MOBILE_NUMBER,
+} from "../constants/gcashPayment.js";
 import IsabelaDeliveryMap from "../components/IsabelaDeliveryMap";
 import { getCartItemKey, useCart } from "../context/CartContext";
 import { isPhoneBlocked } from "../services/blockedPhoneService.js";
 import { saveCustomerProfileWithPhone } from "../services/phoneRegistryService.js";
+import { compressReceiptImage } from "../utils/compressReceiptImage.js";
+import { extractGcashReference } from "../utils/gcashReferenceOcr.js";
+import {
+  checkPaymentReference,
+  claimPaymentReference,
+  DUPLICATE_PAYMENT_REFERENCE_MESSAGE,
+  isValidNormalizedPaymentReference,
+  normalizePaymentReference,
+  PAYMENT_REFERENCE_CHECK_ERROR,
+} from "../utils/paymentReferenceRegistry.js";
 import { auth, db } from "../services/firebase";
 import {
   isValidPHPhone,
@@ -31,6 +46,9 @@ import {
   getCanonicalDeliveryBarangay,
   isBarangayInDeliveryScope,
 } from "../utils/deliveryScope.js";
+import { getDeliveryFeeForBarangay } from "../utils/deliveryFees.js";
+import { getManilaDayState } from "../utils/manilaDay.js";
+import { useAuth } from "../context/Authcontext";
 import "../styles/CheckoutPage.css";
 
 const formatPrice = (price) =>
@@ -43,6 +61,18 @@ const emptyCart = [];
 const MAX_ORDER_LINES = 10;
 const MIN_ITEM_QUANTITY = 1;
 const MAX_ITEM_QUANTITY = 99;
+const QR_REQUIRED_ORDER_TOTAL = 500;
+const CHECKOUT_FULFILLMENT_DRAFT_KEY = "cactus-cafe:checkout-fulfillment";
+const CHECKOUT_FULFILLMENT_MODES = new Set([
+  "delivery",
+  "takeout",
+  "dine-in",
+]);
+const NETWORK_ERROR_CODES = new Set([
+  "unavailable",
+  "deadline-exceeded",
+  "network-request-failed",
+]);
 const BLOCKED_PHONE_MESSAGE =
   "This phone number is blocked and cannot be used for orders. Please contact the café.";
 const FIRST_PHONE_CONFIRMATION =
@@ -62,6 +92,14 @@ const DELIVERY_DETAIL_FIELDS = [
   "deliveryInstructions",
   "deliveryLocation",
 ];
+
+const terminateReceiptOcrWorker = async (worker) => {
+  try {
+    await worker.terminate();
+  } catch (error) {
+    console.error("Unable to stop the receipt OCR worker:", error);
+  }
+};
 
 const getProfileName = (profile, authUser) => {
   const firstName = String(profile.firstName || "").trim();
@@ -184,13 +222,56 @@ function ConfirmationCustomerAvatar({ photoURL }) {
 function CheckoutPage() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const { clearCart } = useCart();
 
   const cart = location.state?.cart ?? emptyCart;
 
-  const [orderType, setOrderType] = useState("takeout");
+  const [orderTypeSelection, setOrderTypeSelection] = useState({
+    userId: null,
+    mode: "takeout",
+  });
+  const savedOrderType = useMemo(() => {
+    if (!user?.uid) return "takeout";
+
+    try {
+      const savedMode = window.sessionStorage.getItem(
+        `${CHECKOUT_FULFILLMENT_DRAFT_KEY}:${user.uid}`
+      );
+      return CHECKOUT_FULFILLMENT_MODES.has(savedMode)
+        ? savedMode
+        : "takeout";
+    } catch (storageError) {
+      console.error("Unable to load the saved fulfillment mode:", storageError);
+      return "takeout";
+    }
+  }, [user]);
+  const orderType = orderTypeSelection.userId === (user?.uid ?? null)
+    ? orderTypeSelection.mode
+    : savedOrderType;
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [paymentTiming, setPaymentTiming] = useState("pay_later");
+  const [paymentReference, setPaymentReference] = useState("");
+  const [paymentReferenceCheck, setPaymentReferenceCheck] = useState({
+    userId: "",
+    reference: "",
+    loading: false,
+    duplicate: false,
+    error: "",
+  });
+  const [receiptOcrStatus, setReceiptOcrStatus] = useState("idle");
+  const [paymentProofUrl, setPaymentProofUrl] = useState("");
+  const [paymentProofBusy, setPaymentProofBusy] = useState(false);
+  const [paymentProofError, setPaymentProofError] = useState("");
+  const [qrValidationAttempted, setQrValidationAttempted] = useState(false);
+  const [recipientCopyFeedback, setRecipientCopyFeedback] = useState("");
+  const [isGcashQrExpanded, setIsGcashQrExpanded] = useState(false);
+  const [deliverySettings, setDeliverySettings] = useState({
+    loaded: false,
+    disableSundayDelivery: false,
+    error: "",
+  });
+  const [currentTime, setCurrentTime] = useState(() => new Date());
   const [details, setDetails] = useState({
     customerName: "",
     phone: "",
@@ -209,7 +290,14 @@ function CheckoutPage() {
   const editedFields = useRef(new Set());
 
   const submissionInProgress = useRef(false);
+  const submissionAttemptRef = useRef({ fingerprint: "", token: "" });
   const [submitting, setSubmitting] = useState(false);
+  const [submissionAttemptToken, setSubmissionAttemptToken] = useState("");
+  const [submissionIssue, setSubmissionIssue] = useState("");
+  const [isOnline, setIsOnline] = useState(
+    () => typeof navigator === "undefined" || navigator.onLine
+  );
+  const submissionWriteStartedRef = useRef(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [phoneFieldError, setPhoneFieldError] = useState("");
   const [phoneCheck, setPhoneCheck] = useState({
@@ -227,13 +315,262 @@ function CheckoutPage() {
   const [submittedAt, setSubmittedAt] = useState(null);
   const [copyFeedback, setCopyFeedback] = useState("");
   const copyFeedbackTimer = useRef(null);
+  const recipientCopyFeedbackTimer = useRef(null);
+  const receiptFileSelectionRef = useRef(0);
+  const receiptOcrGenerationRef = useRef(0);
+  const receiptOcrWorkerRef = useRef(null);
+  const paymentReferenceValueRef = useRef("");
+  const paymentReferenceSourceRef = useRef("");
+  const manualPaymentReferenceOverrideRef = useRef(false);
+  const gcashQrTriggerRef = useRef(null);
+  const gcashQrModalRef = useRef(null);
+  const gcashQrCloseRef = useRef(null);
   const phoneInputRef = useRef(null);
   const phoneConfirmationRef = useRef(null);
+
+  useEffect(() => {
+    const handleOffline = () => setIsOnline(false);
+    const handleOnline = () => setIsOnline(true);
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", handleOnline);
+    return () => {
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", handleOnline);
+    };
+  }, []);
+
+  const handleOrderTypeChange = (nextMode) => {
+    if (!CHECKOUT_FULFILLMENT_MODES.has(nextMode)) return;
+
+    const userId = user?.uid;
+    setOrderTypeSelection({ userId: userId ?? null, mode: nextMode });
+    if (userId) {
+      try {
+        window.sessionStorage.setItem(
+          `${CHECKOUT_FULFILLMENT_DRAFT_KEY}:${userId}`,
+          nextMode
+        );
+      } catch (storageError) {
+        console.error(
+          "Unable to save the selected fulfillment mode:",
+          storageError
+        );
+      }
+    }
+  };
 
   useEffect(() => () => {
     if (copyFeedbackTimer.current) {
       clearTimeout(copyFeedbackTimer.current);
     }
+    if (recipientCopyFeedbackTimer.current) {
+      clearTimeout(recipientCopyFeedbackTimer.current);
+    }
+  }, []);
+
+  useEffect(() => () => {
+    receiptFileSelectionRef.current += 1;
+    receiptOcrGenerationRef.current += 1;
+    const worker = receiptOcrWorkerRef.current;
+    receiptOcrWorkerRef.current = null;
+    if (worker) void terminateReceiptOcrWorker(worker);
+  }, []);
+
+  useEffect(() => {
+    if (!isGcashQrExpanded) return undefined;
+
+    const previousBodyOverflow = document.body.style.overflow;
+    const qrTrigger = gcashQrTriggerRef.current;
+    document.body.style.overflow = "hidden";
+    const handleModalKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setIsGcashQrExpanded(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const focusableElements = gcashQrModalRef.current?.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (!focusableElements?.length) return;
+
+      const firstElement = focusableElements[0];
+      const lastElement = focusableElements[focusableElements.length - 1];
+      if (event.shiftKey && document.activeElement === firstElement) {
+        event.preventDefault();
+        lastElement.focus();
+      } else if (
+        !event.shiftKey
+        && document.activeElement === lastElement
+      ) {
+        event.preventDefault();
+        firstElement.focus();
+      }
+    };
+
+    window.addEventListener("keydown", handleModalKeyDown);
+    gcashQrCloseRef.current?.focus();
+
+    return () => {
+      window.removeEventListener("keydown", handleModalKeyDown);
+      document.body.style.overflow = previousBodyOverflow;
+      qrTrigger?.focus();
+    };
+  }, [isGcashQrExpanded]);
+
+  const cancelReceiptOcr = async () => {
+    receiptOcrGenerationRef.current += 1;
+    setReceiptOcrStatus("idle");
+    const worker = receiptOcrWorkerRef.current;
+    receiptOcrWorkerRef.current = null;
+    if (worker) await terminateReceiptOcrWorker(worker);
+  };
+
+  const scanReceiptForReference = async (receiptDataUrl, generation) => {
+    setReceiptOcrStatus("scanning");
+    let worker;
+    try {
+      const { createWorker } = await import("tesseract.js");
+      if (generation !== receiptOcrGenerationRef.current) return;
+
+      worker = await createWorker("eng");
+      if (generation !== receiptOcrGenerationRef.current) {
+        await terminateReceiptOcrWorker(worker);
+        worker = null;
+        return;
+      }
+
+      receiptOcrWorkerRef.current = worker;
+      const result = await worker.recognize(receiptDataUrl);
+      if (generation !== receiptOcrGenerationRef.current) return;
+
+      const detectedReference = extractGcashReference(result.data.text);
+      if (!detectedReference) {
+        setReceiptOcrStatus("not_found");
+      } else if (
+        !manualPaymentReferenceOverrideRef.current
+        && !paymentReferenceValueRef.current.trim()
+      ) {
+        paymentReferenceValueRef.current = detectedReference;
+        paymentReferenceSourceRef.current = "auto";
+        setPaymentReference(detectedReference);
+        setReceiptOcrStatus("auto_filled");
+      } else {
+        setReceiptOcrStatus("manual_kept");
+      }
+    } catch (error) {
+      if (generation === receiptOcrGenerationRef.current) {
+        console.error("Unable to scan GCash receipt for a reference:", error);
+        setReceiptOcrStatus("error");
+      }
+    } finally {
+      if (worker && receiptOcrWorkerRef.current === worker) {
+        receiptOcrWorkerRef.current = null;
+        await terminateReceiptOcrWorker(worker);
+      }
+    }
+  };
+
+  const handleReceiptChange = async (event) => {
+    const file = event.currentTarget.files?.[0];
+    if (!file) return;
+    const fileInput = event.currentTarget;
+    const fileSelectionId = ++receiptFileSelectionRef.current;
+    setPaymentProofError("");
+    setPaymentProofBusy(true);
+    try {
+      await cancelReceiptOcr();
+      if (fileSelectionId !== receiptFileSelectionRef.current) return;
+      if (paymentReferenceSourceRef.current === "auto") {
+        paymentReferenceValueRef.current = "";
+        paymentReferenceSourceRef.current = "";
+        setPaymentReference("");
+      }
+
+      const compressedReceipt = await compressReceiptImage(file);
+      if (fileSelectionId !== receiptFileSelectionRef.current) return;
+      setPaymentProofUrl(compressedReceipt);
+      void scanReceiptForReference(
+        compressedReceipt,
+        receiptOcrGenerationRef.current,
+      );
+    } catch (error) {
+      if (fileSelectionId !== receiptFileSelectionRef.current) return;
+      console.error("Unable to process GCash receipt:", error);
+      setPaymentProofUrl("");
+      setPaymentProofError(error.message);
+    } finally {
+      if (fileSelectionId === receiptFileSelectionRef.current) {
+        setPaymentProofBusy(false);
+        fileInput.value = "";
+      }
+    }
+  };
+
+  const handleCopyGCashNumber = async () => {
+    try {
+      await navigator.clipboard.writeText(GCASH_MOBILE_NUMBER);
+      setRecipientCopyFeedback("Copied!");
+    } catch (error) {
+      console.error("Unable to copy GCash mobile number:", error);
+      setRecipientCopyFeedback("Unable to copy. Please select the number.");
+    }
+    if (recipientCopyFeedbackTimer.current) {
+      clearTimeout(recipientCopyFeedbackTimer.current);
+    }
+    recipientCopyFeedbackTimer.current = setTimeout(() => {
+      setRecipientCopyFeedback("");
+      recipientCopyFeedbackTimer.current = null;
+    }, 2500);
+  };
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      doc(db, "cafeSettings", "delivery"),
+      (settingsSnapshot) => {
+        if (!settingsSnapshot.exists()) {
+          setDeliverySettings({
+            loaded: true,
+            disableSundayDelivery: false,
+            error: "",
+          });
+          return;
+        }
+
+        const disableSundayDelivery =
+          settingsSnapshot.data().disableSundayDelivery;
+        if (typeof disableSundayDelivery !== "boolean") {
+          const error = new Error("Sunday delivery setting has an invalid value.");
+          console.error("Unable to load Sunday delivery setting:", error);
+          setDeliverySettings({
+            loaded: true,
+            disableSundayDelivery: false,
+            error: "We could not verify Sunday delivery availability.",
+          });
+          return;
+        }
+
+        setDeliverySettings({
+          loaded: true,
+          disableSundayDelivery,
+          error: "",
+        });
+      },
+      (error) => {
+        console.error("Unable to load Sunday delivery setting:", error);
+        setDeliverySettings({
+          loaded: true,
+          disableSundayDelivery: false,
+          error: "We could not verify Sunday delivery availability.",
+        });
+      },
+    );
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 60_000);
+    return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -469,6 +806,81 @@ function CheckoutPage() {
     [cart]
   );
 
+  const requiresUpfrontQr =
+    orderType !== "dine-in" && totalPrice >= QR_REQUIRED_ORDER_TOTAL;
+  const selectedPaymentMethod = requiresUpfrontQr ? "qr" : paymentMethod;
+  const selectedPaymentTiming = requiresUpfrontQr ? "advance" : paymentTiming;
+  const isQrAdvancePayment =
+    selectedPaymentMethod === "qr" && selectedPaymentTiming === "advance";
+  const normalizedPaymentReference =
+    normalizePaymentReference(paymentReference);
+  const paymentReferenceCheckIsCurrent =
+    Boolean(user?.uid && normalizedPaymentReference)
+    && paymentReferenceCheck.userId === user.uid
+    && paymentReferenceCheck.reference === normalizedPaymentReference;
+  const deliveryBarangay = orderType === "delivery"
+    ? getCanonicalDeliveryBarangay(details.barangay)
+    : null;
+  const deliveryFee = orderType === "delivery"
+    ? getDeliveryFeeForBarangay(deliveryBarangay)
+    : 0;
+  const checkoutTotal = totalPrice + (deliveryFee || 0);
+  const manilaDayState = getManilaDayState(currentTime);
+  const sundayDeliveryBlocked =
+    deliverySettings.disableSundayDelivery && manilaDayState.isSunday;
+
+  useEffect(() => {
+    const userId = user?.uid;
+    const reference = normalizePaymentReference(paymentReference);
+    if (
+      !userId
+      || !isQrAdvancePayment
+      || !isValidNormalizedPaymentReference(reference)
+      || !/^\d{13}$/.test(reference)
+    ) {
+      return undefined;
+    }
+
+    let active = true;
+    const timeoutId = window.setTimeout(() => {
+      setPaymentReferenceCheck({
+        userId,
+        reference,
+        loading: true,
+        duplicate: false,
+        error: "",
+      });
+
+      checkPaymentReference(db, userId, paymentReference)
+        .then((duplicate) => {
+          if (!active) return;
+          setPaymentReferenceCheck({
+            userId,
+            reference,
+            loading: false,
+            duplicate,
+            error: "",
+          });
+        })
+        .catch((error) => {
+          if (!active) return;
+          console.error("Unable to check checkout payment reference:", error);
+          setPaymentReferenceCheck({
+            userId,
+            reference,
+            loading: false,
+            duplicate: false,
+            error: PAYMENT_REFERENCE_CHECK_ERROR,
+          });
+        });
+    }, 500);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+    };
+  }, [isQrAdvancePayment, paymentReference, user?.uid]);
+
   const cashPaymentOption =
     orderType === "delivery"
       ? {
@@ -477,7 +889,7 @@ function CheckoutPage() {
         }
       : orderType === "dine-in"
         ? {
-            title: "Pay at Counter",
+            title: "Cash at Counter",
             subtitle: "Pay cash at the cashier",
           }
         : {
@@ -508,6 +920,15 @@ function CheckoutPage() {
     if (submissionInProgress.current) return;
     setErrorMessage("");
 
+    if (!isOnline || (typeof navigator !== "undefined" && !navigator.onLine)) {
+      setSubmissionIssue("offline");
+      return;
+    }
+
+    setSubmissionIssue("");
+
+    const cleanPaymentReference = normalizePaymentReference(paymentReference);
+
     if (cart.length === 0) {
       setErrorMessage("Your cart is empty.");
       return;
@@ -518,6 +939,46 @@ function CheckoutPage() {
         `Your order can include no more than ${MAX_ORDER_LINES} items. Please update your cart.`
       );
       return;
+    }
+
+    if (selectedPaymentMethod === "qr" && selectedPaymentTiming === "advance") {
+      setQrValidationAttempted(true);
+      if (!/^\d{13}$/.test(cleanPaymentReference)) {
+        setErrorMessage("Enter the 13-digit GCash reference number.");
+        document.getElementById("paymentReference")?.focus();
+        return;
+      }
+      if (paymentProofBusy) {
+        setErrorMessage("Please wait while we prepare your GCash receipt image.");
+        return;
+      }
+      if (!paymentProofUrl) {
+        setErrorMessage("Upload your GCash receipt screenshot to continue.");
+        document.getElementById("paymentProof")?.focus();
+        return;
+      }
+    }
+
+    if (orderType === "delivery") {
+      if (!deliverySettings.loaded) {
+        setErrorMessage("Please wait while we check Sunday delivery availability.");
+        return;
+      }
+      if (deliverySettings.error) {
+        setErrorMessage(
+          "Delivery is temporarily unavailable because Sunday availability could not be verified. Takeout and Dine-in are still available.",
+        );
+        return;
+      }
+      if (
+        deliverySettings.disableSundayDelivery
+        && getManilaDayState(new Date()).isSunday
+      ) {
+        setErrorMessage(
+          "Delivery is unavailable on Sundays (Asia/Manila time). Please choose Takeout or Dine-in.",
+        );
+        return;
+      }
     }
 
     const currentUser = auth.currentUser;
@@ -619,6 +1080,13 @@ function CheckoutPage() {
       return;
     }
 
+    if (orderType === "delivery" && deliveryFee === null) {
+      setErrorMessage(
+        "We could not verify the delivery fee for this barangay. Please choose another covered barangay or contact the café.",
+      );
+      return;
+    }
+
     if (
       orderType === "delivery"
       && details.deliveryLocation !== null
@@ -666,7 +1134,87 @@ function CheckoutPage() {
       return;
     }
 
+    if (isQrAdvancePayment) {
+      submissionInProgress.current = true;
+      setSubmitting(true);
+      setPaymentReferenceCheck({
+        userId: currentUser.uid,
+        reference: cleanPaymentReference,
+        loading: true,
+        duplicate: false,
+        error: "",
+      });
+
+      let duplicateReference;
+      try {
+        duplicateReference = await checkPaymentReference(
+          db,
+          currentUser.uid,
+          paymentReference,
+        );
+      } catch (referenceCheckError) {
+        console.error(
+          "Unable to verify checkout payment reference:",
+          referenceCheckError,
+        );
+        setPaymentReferenceCheck({
+          userId: currentUser.uid,
+          reference: cleanPaymentReference,
+          loading: false,
+          duplicate: false,
+          error: PAYMENT_REFERENCE_CHECK_ERROR,
+        });
+        setErrorMessage(PAYMENT_REFERENCE_CHECK_ERROR);
+        submissionInProgress.current = false;
+        setSubmitting(false);
+        return;
+      }
+
+      setPaymentReferenceCheck({
+        userId: currentUser.uid,
+        reference: cleanPaymentReference,
+        loading: false,
+        duplicate: duplicateReference,
+        error: "",
+      });
+      if (duplicateReference) {
+        setErrorMessage(DUPLICATE_PAYMENT_REFERENCE_MESSAGE);
+        submissionInProgress.current = false;
+        setSubmitting(false);
+        document.getElementById("paymentReference")?.focus();
+        return;
+      }
+    }
+
+    const attemptFingerprint = JSON.stringify({
+      customerName: details.customerName.trim(),
+      phone: normalizedPhone,
+      address: customerAddress,
+      notes: details.notes.trim(),
+      orderType,
+      paymentMethod: selectedPaymentMethod,
+      paymentTiming: selectedPaymentTiming,
+      ...(isQrAdvancePayment
+        ? { paymentReference: cleanPaymentReference, paymentProofUrl }
+        : {}),
+      cart: cart.map((item) => ({
+        id: item.id,
+        quantity: item.quantity,
+        selectedSize: item.selectedSize || "",
+      })),
+    });
+    if (submissionAttemptRef.current.fingerprint !== attemptFingerprint) {
+      submissionAttemptRef.current = {
+        fingerprint: attemptFingerprint,
+        token: doc(collection(db, "orderRequests")).id,
+      };
+    }
+    const submissionToken = submissionAttemptRef.current.token;
+    setSubmissionAttemptToken(submissionToken);
+
     submissionInProgress.current = true;
+    submissionWriteStartedRef.current = false;
+    let paymentReferenceClaimAttempted = false;
 
     try {
       setSubmitting(true);
@@ -684,6 +1232,7 @@ function CheckoutPage() {
       }
 
       try {
+        submissionWriteStartedRef.current = true;
         await saveCustomerProfileWithPhone(
           db,
           currentUser.uid,
@@ -732,9 +1281,19 @@ function CheckoutPage() {
         return;
       }
 
-      const requestRef = doc(collection(db, "orderRequests"));
+      const requestRef = doc(db, "orderRequests", submissionToken);
       const selectionRef = doc(db, "paymentSelections", requestRef.id);
       const batch = writeBatch(db);
+      if (isQrAdvancePayment) {
+        claimPaymentReference(
+          batch,
+          db,
+          currentUser.uid,
+          paymentReference,
+          "checkout",
+        );
+        paymentReferenceClaimAttempted = true;
+      }
 
       batch.set(requestRef, {
         customerId: currentUser.uid,
@@ -749,7 +1308,11 @@ function CheckoutPage() {
         orderType,
         address: customerAddress,
         ...(orderType === "delivery"
-          ? { deliveryLocation: details.deliveryLocation }
+          ? {
+            deliveryBarangay,
+            deliveryFee,
+            deliveryLocation: details.deliveryLocation,
+          }
           : {}),
         notes: details.notes.trim(),
         status: "pending",
@@ -758,8 +1321,15 @@ function CheckoutPage() {
       batch.set(selectionRef, {
         requestId: requestRef.id,
         customerId: currentUser.uid,
-        method: paymentMethod,
-        timing: paymentTiming,
+        method: selectedPaymentMethod,
+        timing: selectedPaymentTiming,
+        ...(isQrAdvancePayment
+          ? {
+            paymentReference: cleanPaymentReference,
+            paymentProofUrl,
+            paymentStatus: "pending_verification",
+          }
+          : {}),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -767,6 +1337,9 @@ function CheckoutPage() {
       await batch.commit();
 
       clearCart();
+      submissionAttemptRef.current = { fingerprint: "", token: "" };
+      setSubmissionAttemptToken("");
+      setSubmissionIssue("");
       setSubmittedCustomerName(details.customerName.trim());
       setSubmittedCustomerPhotoURL(
         typeof currentUser.photoURL === "string" ? currentUser.photoURL : ""
@@ -775,6 +1348,35 @@ function CheckoutPage() {
       setSubmittedOrderId(requestRef.id);
     } catch (error) {
       console.error("Error placing order:", error);
+      if (
+        paymentReferenceClaimAttempted
+        && error?.code === "permission-denied"
+      ) {
+        try {
+          if (await checkPaymentReference(
+            db,
+            currentUser.uid,
+            cleanPaymentReference,
+          )) {
+            setPaymentReferenceCheck({
+              userId: currentUser.uid,
+              reference: cleanPaymentReference,
+              loading: false,
+              duplicate: true,
+              error: "",
+            });
+            setErrorMessage(DUPLICATE_PAYMENT_REFERENCE_MESSAGE);
+            setSubmissionIssue("");
+            return;
+          }
+        } catch (referenceCheckError) {
+          console.error(
+            "Unable to identify a conflicting checkout reference:",
+            referenceCheckError,
+          );
+        }
+      }
+
       if (error?.code === "phone/blocked") {
         setPhoneFieldError(BLOCKED_PHONE_MESSAGE);
         setErrorMessage(BLOCKED_PHONE_MESSAGE);
@@ -785,6 +1387,16 @@ function CheckoutPage() {
           error: "",
         });
       } else {
+        if (
+          submissionWriteStartedRef.current
+          || NETWORK_ERROR_CODES.has(error?.code)
+          || (typeof navigator !== "undefined" && !navigator.onLine)
+        ) {
+          const networkInterrupted =
+            NETWORK_ERROR_CODES.has(error?.code)
+            || (typeof navigator !== "undefined" && !navigator.onLine);
+          setSubmissionIssue(networkInterrupted ? "interrupted" : "uncertain");
+        }
         setErrorMessage(
           error?.code === "phone/already-registered"
             ? "This phone number is already registered to another account. Please use another phone number."
@@ -793,6 +1405,7 @@ function CheckoutPage() {
       }
     } finally {
       submissionInProgress.current = false;
+      submissionWriteStartedRef.current = false;
       setSubmitting(false);
     }
   };
@@ -928,6 +1541,8 @@ function CheckoutPage() {
   const customBarangayInScope = customBarangay
     ? isBarangayInDeliveryScope(customBarangay)
     : false;
+  const showSundayDeliveryNotice = deliverySettings.disableSundayDelivery
+    && (manilaDayState.isSunday || manilaDayState.isSaturdayEvening);
 
   return (
     <main className="checkout-page">
@@ -957,6 +1572,7 @@ function CheckoutPage() {
           <form
             className="checkout-form-card"
             onSubmit={handleSubmit}
+            noValidate
           >
             <div className="form-card-heading">
               <div className="step-number">01</div>
@@ -1003,6 +1619,7 @@ function CheckoutPage() {
                   aria-invalid={Boolean(phoneFieldError)}
                   aria-describedby={[
                     phoneFieldError ? "phone-error" : "",
+                    "phone-order-contact-note",
                     hasRegisteredPhone ? "phone-profile-notice" : "phone-setup-notice",
                   ].filter(Boolean).join(" ") || undefined}
                   readOnly={hasRegisteredPhone || !customerProfile || Boolean(profileLoadError)}
@@ -1041,6 +1658,9 @@ function CheckoutPage() {
                     {BLOCKED_PHONE_MESSAGE}
                   </span>
                 )}
+                <span className="phone-profile-notice" id="phone-order-contact-note">
+                  Use a reachable number so we can confirm your order and coordinate pickup or delivery.
+                </span>
                 {phoneCheckError && (
                   <span className="phone-field-error" role="alert">
                     {phoneCheckError}
@@ -1111,7 +1731,7 @@ function CheckoutPage() {
                   value="takeout"
                   checked={orderType === "takeout"}
                   onChange={(event) => {
-                    setOrderType(event.target.value);
+                    handleOrderTypeChange(event.target.value);
                     setErrorMessage("");
                   }}
                 />
@@ -1137,7 +1757,7 @@ function CheckoutPage() {
                   value="delivery"
                   checked={orderType === "delivery"}
                   onChange={(event) => {
-                    setOrderType(event.target.value);
+                    handleOrderTypeChange(event.target.value);
                     setErrorMessage("");
                   }}
                 />
@@ -1163,7 +1783,9 @@ function CheckoutPage() {
                   value="dine-in"
                   checked={orderType === "dine-in"}
                   onChange={(event) => {
-                    setOrderType(event.target.value);
+                    handleOrderTypeChange(event.target.value);
+                    setPaymentMethod("cash");
+                    setPaymentTiming("pay_later");
                     setErrorMessage("");
                   }}
                 />
@@ -1178,6 +1800,22 @@ function CheckoutPage() {
                 <span className="radio-mark" />
               </label>
             </div>
+
+            {orderType === "delivery" && !deliverySettings.loaded && (
+              <div className="delivery-day-notice" role="status">
+                Checking Sunday delivery availability...
+              </div>
+            )}
+            {deliverySettings.error && (
+              <div className="delivery-day-notice" role="alert">
+                {deliverySettings.error} Delivery is unavailable until it can be checked; Takeout and Dine-in remain available.
+              </div>
+            )}
+            {showSundayDeliveryNotice && (
+              <div className="delivery-day-notice" role="status">
+                Sunday delivery is disabled. Delivery orders cannot be submitted on Sundays in Asia/Manila time. This notice appears from Saturday at 6:00 PM; Takeout and Dine-in remain available.
+              </div>
+            )}
 
             <div className="form-grid delivery-address-grid">
               <div className="form-group form-group-full">
@@ -1263,7 +1901,7 @@ function CheckoutPage() {
                     className="primary-button"
                     type="button"
                     onClick={() => {
-                      setOrderType("takeout");
+                      handleOrderTypeChange("takeout");
                       setErrorMessage("");
                     }}
                   >
@@ -1374,10 +2012,25 @@ function CheckoutPage() {
               aria-describedby="payment-instruction"
             >
               <legend>Payment</legend>
+              {requiresUpfrontQr && (
+                <div className="payment-requirement-notice" role="status">
+                  Takeout and Delivery orders with an items subtotal of ₱500 or more require GCash / QR payment upfront. Cash is available below ₱500; delivery fees are shown separately.
+                </div>
+              )}
+              {orderType === "delivery" && deliveryFee > 0 && (
+                <div className="payment-requirement-notice" role="status">
+                  Delivery to {deliveryBarangay} adds a {formatPrice(deliveryFee)} delivery fee.
+                </div>
+              )}
+              {orderType === "dine-in" && (
+                <div className="payment-requirement-notice" role="status">
+                  Cash at Counter is the default for Dine-in; GCash / QR is optional.
+                </div>
+              )}
               <div className="payment-selection-options">
                 <label
                   className={`order-type-card ${
-                    paymentMethod === "qr" && paymentTiming === "advance"
+                    selectedPaymentMethod === "qr" && selectedPaymentTiming === "advance"
                       ? "selected"
                       : ""
                   }`}
@@ -1387,7 +2040,7 @@ function CheckoutPage() {
                     name="paymentChoice"
                     value="qr-advance"
                     checked={
-                      paymentMethod === "qr" && paymentTiming === "advance"
+                      selectedPaymentMethod === "qr" && selectedPaymentTiming === "advance"
                     }
                     onChange={() => {
                       setPaymentMethod("qr");
@@ -1415,24 +2068,18 @@ function CheckoutPage() {
                         <span className="payment-method-badge gcash-badge">
                           GCash
                         </span>
-                        <span className="payment-method-badge maya-badge">
-                          Maya
-                        </span>
-                        <span className="payment-method-badge secure-badge">
-                          Secure
-                        </span>
                       </span>
                     </span>
                   </span>
                   <small className="payment-card-subtitle">
-                    Pay via GCash / Maya QR before we prepare your order
+                    Pay via GCash QR before we prepare your order
                   </small>
                   <span className="radio-mark" />
                 </label>
 
                 <label
                   className={`order-type-card ${
-                    paymentMethod === "cash" && paymentTiming === "pay_later"
+                    selectedPaymentMethod === "cash" && selectedPaymentTiming === "pay_later"
                       ? "selected"
                       : ""
                   }`}
@@ -1441,8 +2088,9 @@ function CheckoutPage() {
                     type="radio"
                     name="paymentChoice"
                     value="cash-later"
+                    disabled={requiresUpfrontQr}
                     checked={
-                      paymentMethod === "cash" && paymentTiming === "pay_later"
+                      selectedPaymentMethod === "cash" && selectedPaymentTiming === "pay_later"
                     }
                     onChange={() => {
                       setPaymentMethod("cash");
@@ -1480,6 +2128,224 @@ function CheckoutPage() {
                   <span className="radio-mark" />
                 </label>
               </div>
+              {selectedPaymentMethod === "qr"
+                && selectedPaymentTiming === "advance" && (
+                  <section
+                    className="gcash-payment-panel"
+                    aria-labelledby="gcash-payment-title"
+                  >
+                    <div className="gcash-payment-heading">
+                      <p className="section-eyebrow">GCASH QR PAYMENT</p>
+                      <h3 id="gcash-payment-title">Scan &amp; Pay via GCash</h3>
+                    </div>
+                    <div className="gcash-payment-content">
+                      <div className="gcash-payment-recipient">
+                        <button
+                          ref={gcashQrTriggerRef}
+                          type="button"
+                          className="gcash-qr-trigger"
+                          onClick={() => setIsGcashQrExpanded(true)}
+                          aria-label="Expand Cactus Café GCash QR code"
+                          aria-haspopup="dialog"
+                        >
+                          <span className="gcash-qr-frame">
+                            <img
+                              src="/gcash.jpg"
+                              alt="Cactus Café GCash QR code"
+                            />
+                          </span>
+                          <span className="gcash-qr-expand-hint" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" fill="none">
+                              <path d="M8 3H3v5M16 3h5v5M3 16v5h5m13-5v5h-5" />
+                              <path d="M9 9 3 3m12 6 6-6M9 15l-6 6m12-6 6 6" />
+                            </svg>
+                            Click or tap to enlarge
+                          </span>
+                        </button>
+                        <div className="gcash-recipient-details">
+                          <div>
+                            <span>Account Name</span>
+                            <strong>{GCASH_ACCOUNT_NAME}</strong>
+                          </div>
+                          <div>
+                            <span>GCash Mobile No.</span>
+                            <div className="gcash-mobile-row">
+                              <strong>{GCASH_MOBILE_NUMBER}</strong>
+                              <button
+                                type="button"
+                                className="gcash-copy-button"
+                                onClick={handleCopyGCashNumber}
+                              >
+                                Copy
+                              </button>
+                            </div>
+                            {recipientCopyFeedback && (
+                              <small role="status">{recipientCopyFeedback}</small>
+                            )}
+                          </div>
+                          <div className="gcash-order-total">
+                            <span>Order Total</span>
+                            <strong>{formatPrice(checkoutTotal)}</strong>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="gcash-payment-proof">
+                        <div className="form-group form-group-full">
+                          <label htmlFor="paymentReference">
+                            GCash Reference Number <span>Required</span>
+                          </label>
+                          <input
+                            id="paymentReference"
+                            name="paymentReference"
+                            type="text"
+                            inputMode="numeric"
+                            autoComplete="off"
+                            maxLength={13}
+                            disabled={submitting}
+                            placeholder="13-digit GCash Ref No"
+                            value={paymentReference}
+                            onChange={(event) => {
+                              const nextReference = event.target.value
+                                .replace(/\D/g, "")
+                                .slice(0, 13);
+                              paymentReferenceValueRef.current = nextReference;
+                              paymentReferenceSourceRef.current = "manual";
+                              manualPaymentReferenceOverrideRef.current = true;
+                              setPaymentReference(nextReference);
+                              setReceiptOcrStatus((currentStatus) => (
+                                currentStatus === "scanning" ? currentStatus : "idle"
+                              ));
+                              setErrorMessage("");
+                            }}
+                            aria-invalid={
+                              (qrValidationAttempted
+                                && !/^\d{13}$/.test(normalizedPaymentReference))
+                              || (paymentReferenceCheckIsCurrent
+                                && paymentReferenceCheck.duplicate)
+                            }
+                            aria-describedby="gcash-reference-check-status"
+                            required
+                          />
+                          <small
+                            id="gcash-reference-check-status"
+                            className="gcash-reference-check-status"
+                            role={
+                              paymentReferenceCheckIsCurrent
+                              && paymentReferenceCheck.error
+                                ? "alert"
+                                : "status"
+                            }
+                          >
+                            {paymentReferenceCheckIsCurrent
+                            && paymentReferenceCheck.error
+                              ? paymentReferenceCheck.error
+                              : paymentReferenceCheckIsCurrent
+                                && paymentReferenceCheck.loading
+                                ? "Checking this reference against existing payments…"
+                                : ""}
+                          </small>
+                          {receiptOcrStatus !== "idle" && (
+                            <small
+                              className={`gcash-ocr-status gcash-ocr-status-${receiptOcrStatus}`}
+                              role="status"
+                              aria-live="polite"
+                            >
+                              {receiptOcrStatus === "scanning"
+                                ? "Scanning receipt for GCash reference number..."
+                                : receiptOcrStatus === "auto_filled"
+                                  ? "Auto-filled from screenshot—please double-check before confirming."
+                                  : receiptOcrStatus === "manual_kept"
+                                    ? "A reference was detected, but your manually entered value was kept."
+                                    : receiptOcrStatus === "not_found"
+                                      ? "Couldn't detect a 13-digit reference. Type or paste it from your receipt."
+                                      : "Automatic scan couldn't read the screenshot. Type or paste the 13-digit reference manually."}
+                            </small>
+                          )}
+                          {qrValidationAttempted
+                            && !/^\d{13}$/.test(paymentReference.trim()) && (
+                              <small className="gcash-field-error" role="alert">
+                                Enter all 13 digits from your GCash receipt.
+                              </small>
+                            )}
+                        </div>
+                        <div className="form-group form-group-full">
+                          <label htmlFor="paymentProof">
+                            Upload GCash Receipt Screenshot <span>Required</span>
+                          </label>
+                          <input
+                            id="paymentProof"
+                            name="paymentProof"
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp"
+                            onChange={handleReceiptChange}
+                            aria-invalid={
+                              qrValidationAttempted && !paymentProofUrl
+                            }
+                            required
+                          />
+                          <small className="gcash-upload-hint">
+                            JPEG, PNG, or WebP. The image is compressed securely
+                            in your browser before submission.
+                          </small>
+                          {paymentProofBusy && (
+                            <small role="status">Preparing receipt image…</small>
+                          )}
+                          {paymentProofError && (
+                            <small className="gcash-field-error" role="alert">
+                              {paymentProofError}
+                            </small>
+                          )}
+                          {qrValidationAttempted && !paymentProofUrl
+                            && !paymentProofBusy && !paymentProofError && (
+                              <small className="gcash-field-error" role="alert">
+                                Upload your GCash receipt screenshot.
+                              </small>
+                            )}
+                          {paymentProofUrl && (
+                            <div className="gcash-receipt-preview">
+                              <img
+                                src={paymentProofUrl}
+                                alt="Compressed GCash receipt preview"
+                              />
+                              <button
+                                type="button"
+                                className="gcash-remove-button"
+                                onClick={async () => {
+                                  await cancelReceiptOcr();
+                                  if (paymentReferenceSourceRef.current === "auto") {
+                                    paymentReferenceValueRef.current = "";
+                                    paymentReferenceSourceRef.current = "";
+                                    setPaymentReference("");
+                                  }
+                                  setPaymentProofUrl("");
+                                  setPaymentProofError("");
+                                  setQrValidationAttempted(false);
+                                }}
+                              >
+                                Remove screenshot
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        {paymentReferenceCheckIsCurrent
+                          && paymentReferenceCheck.duplicate && (
+                            <p
+                              className="gcash-reference-warning"
+                              role="alert"
+                            >
+                              {DUPLICATE_PAYMENT_REFERENCE_MESSAGE}
+                            </p>
+                        )}
+                      </div>
+                    </div>
+                    <p className="gcash-payment-callout">
+                      Scan the GCash QR code, pay the exact total, and upload your
+                      receipt + reference number below. Preparation begins once
+                      our staff verifies your payment.
+                    </p>
+                  </section>
+                )}
             </fieldset>
             <div
               className="payment-instruction"
@@ -1491,11 +2357,10 @@ function CheckoutPage() {
                 ✦
               </span>
               <p>
-                {paymentMethod === "qr" && paymentTiming === "advance" ? (
+                {selectedPaymentMethod === "qr" && selectedPaymentTiming === "advance" ? (
                   <>
-                    Once your request is approved, follow the café&apos;s QR
-                    payment instructions and submit your transaction reference
-                    in My Orders. Preparation starts after payment is verified.
+                    Your GCash payment details and receipt will be sent with your
+                    order request for staff verification.
                   </>
                 ) : (
                   <>
@@ -1528,6 +2393,37 @@ function CheckoutPage() {
               </div>
             )}
 
+            {(!isOnline || submissionIssue === "offline") && (
+              <div className="checkout-connectivity-notice" role="status">
+                <strong>
+                  {isOnline
+                    ? "You’re back online"
+                    : "Internet connection unavailable"}
+                </strong>
+                <p>
+                  {isOnline
+                    ? "Your order has not been submitted. Continue when you’re ready."
+                    : "Your selections are still here. Reconnect before placing your order; reconnecting will not submit it automatically."}
+                </p>
+              </div>
+            )}
+
+            {(submissionIssue === "interrupted"
+              || submissionIssue === "uncertain") && (
+              <div className="checkout-submission-notice" role="status">
+                <strong>
+                  {submissionIssue === "interrupted"
+                    ? "Your connection was interrupted while placing the order."
+                    : "We couldn’t confirm whether your order was received."}
+                </strong>
+                <p>
+                  Check <Link to="/my-orders">My Orders</Link> before retrying.
+                  If it is not listed, you can retry manually; this attempt keeps
+                  the same request key.
+                </p>
+              </div>
+            )}
+
             <div className="checkout-actions">
               <button
                 type="button"
@@ -1543,6 +2439,7 @@ function CheckoutPage() {
                 className="primary-button"
                 disabled={
                   submitting
+                  || !isOnline
                   || !profileLoadDone
                   || (Boolean(auth.currentUser) && !customerProfile)
                   || Boolean(profileLoadError)
@@ -1550,11 +2447,23 @@ function CheckoutPage() {
                   || phoneBlocked
                   || phoneCheckPending
                   || Boolean(phoneCheckError)
+                  || (
+                    orderType === "delivery"
+                    && (
+                      !deliverySettings.loaded
+                      || Boolean(deliverySettings.error)
+                      || sundayDeliveryBlocked
+                    )
+                  )
                 }
               >
                 {submitting
                   ? "Placing order..."
-                  : "Confirm order"}
+                  : (submissionIssue === "uncertain"
+                    || submissionIssue === "interrupted")
+                    && submissionAttemptToken
+                    ? "Retry order manually"
+                    : "Confirm order"}
               </button>
             </div>
           </form>
@@ -1611,13 +2520,13 @@ function CheckoutPage() {
             </div>
 
             <div className="summary-row">
-              <span>Service fee</span>
-              <strong>₱0.00</strong>
+              <span>Delivery fee</span>
+              <strong>{formatPrice(deliveryFee || 0)}</strong>
             </div>
 
             <div className="summary-total">
               <span>Total</span>
-              <strong>{formatPrice(totalPrice)}</strong>
+              <strong>{formatPrice(checkoutTotal)}</strong>
             </div>
 
             <div className="summary-note">
@@ -1627,6 +2536,80 @@ function CheckoutPage() {
             </div>
           </aside>
         </div>
+        {isGcashQrExpanded && (
+          <div
+            className="gcash-qr-modal-backdrop"
+            onClick={(event) => {
+              if (event.target === event.currentTarget) {
+                setIsGcashQrExpanded(false);
+              }
+            }}
+          >
+            <section
+              ref={gcashQrModalRef}
+              className="gcash-qr-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="gcash-qr-modal-title"
+              aria-describedby="gcash-qr-modal-description"
+            >
+              <div className="gcash-qr-modal-header">
+                <div>
+                  <p className="section-eyebrow">GCASH QR PAYMENT</p>
+                  <h2 id="gcash-qr-modal-title">Scan &amp; Pay via GCash</h2>
+                </div>
+                <button
+                  ref={gcashQrCloseRef}
+                  type="button"
+                  className="gcash-qr-modal-close"
+                  onClick={() => setIsGcashQrExpanded(false)}
+                  aria-label="Close expanded GCash QR code"
+                >
+                  <span aria-hidden="true">×</span>
+                  Close
+                </button>
+              </div>
+              <div className="gcash-modal-qr-frame">
+                <img
+                  src="/gcash.jpg"
+                  alt="Expanded Cactus Café GCash QR code"
+                />
+              </div>
+              <p
+                className="gcash-qr-modal-description"
+                id="gcash-qr-modal-description"
+              >
+                Scan the QR code using GCash and pay the exact order total.
+              </p>
+              <div className="gcash-qr-modal-recipient">
+                <div>
+                  <span>Account Name</span>
+                  <strong>{GCASH_ACCOUNT_NAME}</strong>
+                </div>
+                <div>
+                  <span>GCash Mobile No.</span>
+                  <div className="gcash-mobile-row">
+                    <strong>{GCASH_MOBILE_NUMBER}</strong>
+                    <button
+                      type="button"
+                      className="gcash-copy-button"
+                      onClick={handleCopyGCashNumber}
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  {recipientCopyFeedback && (
+                    <small role="status">{recipientCopyFeedback}</small>
+                  )}
+                </div>
+                <div>
+                  <span>Order Total</span>
+                  <strong>{formatPrice(checkoutTotal)}</strong>
+                </div>
+              </div>
+            </section>
+          </div>
+        )}
       </div>
     </main>
   );

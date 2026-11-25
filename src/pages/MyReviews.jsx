@@ -43,7 +43,7 @@ const getStatusClass = (status) =>
 
 const isCompletedOrder = (status) => {
   const normalizedStatus = String(status || "").trim().toLowerCase();
-  return normalizedStatus.includes("complete") || normalizedStatus === "delivered";
+  return normalizedStatus === "completed" || normalizedStatus === "delivered";
 };
 
 function MyReviews() {
@@ -256,6 +256,7 @@ function MyReviews() {
       <main className="my-reviews-page">
         <section
           className="reviews-container reviews-loading"
+          role="status"
           aria-busy="true"
           aria-label="Loading your reviews"
         >
@@ -266,12 +267,25 @@ function MyReviews() {
           </div>
           <div className="reviews-loading-overview" />
           <div className="reviews-loading-layout">
-            <div className="reviews-loading-card form-skeleton" />
-            <div className="reviews-loading-card list-skeleton" />
+            <div className="reviews-loading-card form-skeleton" aria-hidden="true">
+              <span className="reviews-skeleton-field" />
+              <span className="reviews-skeleton-field" />
+              <span className="reviews-skeleton-field reviews-skeleton-field-large" />
+              <span className="reviews-skeleton-action" />
+            </div>
+            <div className="reviews-loading-card list-skeleton" aria-hidden="true">
+              {[1, 2, 3].map((item) => (
+                <div className="reviews-skeleton-row" key={item}>
+                  <span className="reviews-skeleton-avatar" />
+                  <span className="reviews-skeleton-copy">
+                    <span />
+                    <span />
+                  </span>
+                  <span className="reviews-skeleton-rating" />
+                </div>
+              ))}
+            </div>
           </div>
-          <p className="reviews-loading-label" role="status">
-            Loading your review history...
-          </p>
         </section>
       </main>
     );

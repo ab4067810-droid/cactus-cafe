@@ -8,6 +8,8 @@ import {
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { NavLink, useNavigate } from "react-router-dom";
 
+import AdminWorkspaceNavigation from "../components/AdminWorkspaceNavigation";
+import AdminLoadingSkeleton from "../components/AdminLoadingSkeleton";
 import { auth, db } from "../services/firebase";
 import {
   createMenuWriteService,
@@ -492,19 +494,6 @@ function AdminMenu() {
     }
   };
 
-  if (loading) {
-    return (
-      <main className="admin-menu-page">
-        <section className="admin-menu-loading">
-          <div className="loading-icon">🌵</div>
-          <p className="admin-menu-eyebrow">CACTUS CAFE</p>
-          <h1>Loading menu workspace</h1>
-          <div className="loading-bar" />
-        </section>
-      </main>
-    );
-  }
-
   return (
     <main className="admin-menu-page">
       {mobileNavigationOpen && (
@@ -527,86 +516,19 @@ function AdminMenu() {
           className="admin-menu-brand"
           onClick={() => setMobileNavigationOpen(false)}
         >
-          <span className="admin-menu-brand-mark" aria-hidden="true">🌵</span>
+          <span className="admin-menu-brand-mark" aria-hidden="true">C</span>
           <span>
             <strong>Cactus Café</strong>
-            <small>ADMIN WORKSPACE</small>
+            <small>STAFF WORKSPACE</small>
           </span>
         </NavLink>
 
         <div className="admin-menu-sidebar-label">WORKSPACE</div>
         <nav className="admin-menu-nav">
-          <NavLink
-            to="/admin/menu"
-            end
-            className={({ isActive }) =>
-              `admin-menu-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-menu-nav-icon" aria-hidden="true">▦</span>
-            <span>Menu Management</span>
-          </NavLink>
-          <NavLink
-            to="/admin/orders"
-            className={({ isActive }) =>
-              `admin-menu-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-menu-nav-icon" aria-hidden="true">↗</span>
-            <span>Orders</span>
-          </NavLink>
-          <NavLink
-            to="/admin/payments"
-            className={({ isActive }) =>
-              `admin-menu-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-menu-nav-icon" aria-hidden="true">₱</span>
-            <span>Payment Management</span>
-          </NavLink>
-          <NavLink
-            to="/admin/reservations"
-            className={({ isActive }) =>
-              `admin-menu-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-menu-nav-icon" aria-hidden="true">◷</span>
-            <span>Reservations</span>
-          </NavLink>
-          <NavLink
-            to="/admin/reviews"
-            className={({ isActive }) =>
-              `admin-menu-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-menu-nav-icon" aria-hidden="true">☆</span>
-            <span>Reviews</span>
-          </NavLink>
-          <NavLink
-            to="/admin/users"
-            className={({ isActive }) =>
-              `admin-menu-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-menu-nav-icon" aria-hidden="true">◎</span>
-            <span>Customers &amp; Security</span>
-          </NavLink>
-          <NavLink
-            to="/admin/monthly-records"
-            className={({ isActive }) =>
-              `admin-menu-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-menu-nav-icon" aria-hidden="true">▤</span>
-            <span>Monthly Records</span>
-          </NavLink>
+          <AdminWorkspaceNavigation
+            classPrefix="admin-menu"
+            onNavigate={() => setMobileNavigationOpen(false)}
+          />
         </nav>
 
         <div className="admin-menu-sidebar-footer">
@@ -656,6 +578,10 @@ function AdminMenu() {
           </div>
         </header>
 
+        {loading ? (
+          <AdminLoadingSkeleton label="Loading menu" stats={5} rows={5} />
+        ) : (
+          <>
         {menuWritesLocked && (
           <div
             className="admin-menu-migration-notice"
@@ -1230,6 +1156,8 @@ function AdminMenu() {
             </div>
           )}
         </section>
+          </>
+        )}
         </div>
       </div>
     </main>

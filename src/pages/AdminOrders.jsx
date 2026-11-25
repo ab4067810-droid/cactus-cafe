@@ -14,19 +14,37 @@ import {
   onSnapshot,
   serverTimestamp,
   updateDoc,
+  writeBatch,
 } from "firebase/firestore";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { NavLink, useNavigate } from "react-router-dom";
 
+import AdminWorkspaceNavigation from "../components/AdminWorkspaceNavigation";
+import AdminLoadingSkeleton from "../components/AdminLoadingSkeleton";
 import { auth, db } from "../services/firebase";
+import { getEffectiveRole } from "../utils/userRole";
 import { listBlockedPhones } from "../services/blockedPhoneService";
 import PhoneBlockControl from "../components/PhoneBlockControl";
-import { approveOrderRequest } from "../services/orderApprovalService";
+import {
+  approveOrderRequest,
+  updateQrOrderPaymentStatus,
+} from "../services/orderApprovalService";
+import { loadAdminOrderPaymentDetails } from "../services/paymentRecordService";
 import {
   createCustomerNotification,
   updateStatusWithNotification,
 } from "../services/notificationService";
 import { getApprovalPricing } from "../utils/approvalPricing";
+import { getOrderApprovalPricing } from "../utils/deliveryFees.js";
+import { getDeliveryFeeForBarangay } from "../utils/deliveryFees.js";
+import { normalizeDeliveryProofUrl } from "../utils/deliveryProofUrl.js";
+import {
+  canApplyDeliveryWaitingFee,
+  DELIVERY_WAITING_FEE,
+  formatDeliveryGraceRemaining,
+  getDeliveryGracePeriod,
+  hasDeliveryWaitingFee,
+} from "../utils/orderStatus.js";
 import { normalizePHPhone } from "../utils/phoneUtils.js";
 import "../styles/AdminOrders.css";
 import "../styles/AdminSidebar.css";
@@ -49,6 +67,8 @@ const REQUEST_STATUS_OPTIONS = [
 
 const DEFAULT_REJECTION_REASON =
   "We are unable to fulfill this order request at this time.";
+const UNREACHABLE_ORDER_REASON =
+  "Customer could not be reached after the 10-minute delivery grace period.";
 const QUICK_REJECTION_REASONS = [
   {
     value: "unavailable",
@@ -95,6 +115,28 @@ const formatOrderType = (orderType) => {
 
   return labels[String(orderType || "").toLowerCase()] || "Not specified";
 };
+
+const getPaymentMethodLabel = (method) => (
+  method === "cash"
+    ? "Cash"
+    : method === "qr" ? "GCash QR" : "Not recorded"
+);
+
+const getPaymentStatusLabel = (status) => ({
+  unpaid: "Unpaid",
+  paid: "Verified in GCash",
+  pending_verification: "Awaiting GCash confirmation",
+  pending_review: "Awaiting GCash confirmation",
+  needs_review: "Needs review",
+  admin_review_required: "Needs review",
+  rejected: "Rejected",
+  "not submitted": "Awaiting QR reference",
+}[status] || status || "Not recorded");
+
+const getPaymentStatusClass = (status) => String(status || "unknown")
+  .toLowerCase()
+  .replace(/_/g, "-")
+  .replace(/\s+/g, "-");
 
 const normalizeOrderType = (orderType) => {
   const normalizedType = String(orderType || "").trim().toLowerCase();
@@ -217,6 +259,13 @@ const getStatusOptions = (order) => {
     ];
   }
 
+  if (
+    order.paymentMethod === "cash"
+    && order.cashPaymentStatus !== "paid"
+  ) {
+    options = [...options, "On Hold"];
+  }
+
   const currentStatus = order.status || "Pending";
 
   if (!options.includes(currentStatus)) {
@@ -239,35 +288,199 @@ const getStatusFlowDescription = (order) => {
   }
 
   steps.push("Completed");
-  return `Expected flow: ${steps.join(" > ")} (or Cancelled).`;
+  const cashNote = order.paymentMethod === "cash"
+    ? " Use On Hold while waiting; mark a delivery Unreachable after the 10-minute grace period."
+    : "";
+  return `Expected flow: ${steps.join(" > ")} (or Cancelled).${cashNote}`;
 };
 
 const getTotal = (order) => {
+  const waitingFee = hasDeliveryWaitingFee(order)
+    ? DELIVERY_WAITING_FEE
+    : 0;
+  let baseTotal;
+
   if (order.totalPrice !== undefined) {
-    return Number(order.totalPrice) || 0;
-  }
-
-  if (order.total !== undefined) {
-    return Number(order.total) || 0;
-  }
-
-  if (Array.isArray(order.items)) {
-    return order.items.reduce(
+    baseTotal = Number(order.totalPrice) || 0;
+  } else if (order.total !== undefined) {
+    baseTotal = Number(order.total) || 0;
+  } else if (Array.isArray(order.items)) {
+    const itemSubtotal = order.items.reduce(
       (sum, item) =>
         sum +
         Number(item.price || 0) * Number(item.quantity || 0),
       0
     );
+    baseTotal = itemSubtotal + (Number(order.deliveryFee) || 0);
+  } else {
+    baseTotal = 0;
   }
 
-  return 0;
+  return baseTotal + waitingFee;
 };
+
+function DeliveryProofPreview({ proofUrl }) {
+  const [imageLoadFailed, setImageLoadFailed] = useState(false);
+  return (
+    <div className="delivery-proof-preview">
+      {!imageLoadFailed ? (
+        <img
+          className="delivery-proof-image"
+          src={proofUrl}
+          alt="Proof of Delivery"
+          referrerPolicy="no-referrer"
+          onError={() => setImageLoadFailed(true)}
+        />
+      ) : (
+        <p role="status">
+          The photo preview is unavailable. Use the link to open it.
+        </p>
+      )}
+      <a
+        href={proofUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        referrerPolicy="no-referrer"
+      >
+        Open Proof of Delivery photo
+      </a>
+    </div>
+  );
+}
+
+function RequestQrPaymentDetails({
+  orderId,
+  payment,
+  total,
+  totalUnavailableLabel = "Open pricing preview to calculate",
+  copiedPaymentReference,
+  onCopyReference,
+  onOpenReceipt,
+}) {
+  const numericTotal = typeof total === "number"
+    ? total
+    : typeof total === "string" && total.trim()
+      ? Number(total)
+      : Number.NaN;
+  const paymentStatus = payment.paymentStatus || "pending_verification";
+  const paymentReference = payment.paymentReference || "";
+  const paymentProofUrl = payment.paymentProofUrl || "";
+  const paymentStatusLabel = paymentStatus === "pending_verification"
+    ? "Pending GCash Check"
+    : getPaymentStatusLabel(paymentStatus);
+
+  return (
+    <section
+      className="request-gcash-payment order-gcash-review order-gcash-request-card"
+      aria-label="GCash QR payment details"
+    >
+      <div className="order-gcash-topbar">
+        <div className="request-gcash-total-block">
+          <div className="order-gcash-total">
+            <span>Order Total</span>
+            <strong>
+              {Number.isFinite(numericTotal)
+                ? formatPrice(numericTotal)
+                : totalUnavailableLabel}
+            </strong>
+          </div>
+          <p className="request-gcash-total-note">
+            Estimated from current menu prices; confirm against the receipt.
+          </p>
+        </div>
+        <div className="request-gcash-status">
+          <span>Payment status</span>
+          <div>
+            <strong>{paymentStatusLabel}</strong>
+            <code>{paymentStatus}</code>
+          </div>
+        </div>
+      </div>
+
+      <div className="order-gcash-details-grid">
+        <div className="order-gcash-reference">
+          <span>13-digit GCash Reference Number</span>
+          {paymentReference ? (
+            <div className="order-gcash-reference-row">
+              <code>{paymentReference}</code>
+              <button
+                type="button"
+                className={`order-gcash-copy${copiedPaymentReference === orderId ? " is-copied" : ""}`}
+                onClick={() => onCopyReference({
+                  id: orderId,
+                  paymentReference,
+                })}
+                aria-label={
+                  copiedPaymentReference === orderId
+                    ? "GCash reference copied"
+                    : `Copy GCash reference ${paymentReference}`
+                }
+              >
+                {copiedPaymentReference === orderId ? "Copied!" : "Copy"}
+              </button>
+            </div>
+          ) : (
+            <p className="request-gcash-missing">
+              Reference not available in the loaded payment selection.
+            </p>
+          )}
+          <div className="request-gcash-reminder">
+            <p>
+              Before approving, confirm this reference and the exact amount
+              were received in GCash. Payment remains pending until verified.
+            </p>
+          </div>
+        </div>
+
+        <div className="order-gcash-receipt">
+          <span>Receipt Screenshot</span>
+          {paymentProofUrl ? (
+            <div className="order-gcash-receipt-actions">
+              <button
+                type="button"
+                className="order-payment-proof-preview"
+                onClick={() => onOpenReceipt({
+                  orderId,
+                  reference: paymentReference,
+                  total,
+                  url: paymentProofUrl,
+                })}
+                aria-label={`Enlarge GCash receipt for order ${orderId}`}
+              >
+                <img src={paymentProofUrl} alt="Customer GCash receipt preview" />
+                <span>Enlarge receipt</span>
+              </button>
+              <a
+                className="order-payment-proof-link"
+                href={paymentProofUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open original
+              </a>
+            </div>
+          ) : (
+            <p className="request-gcash-missing">
+              Receipt screenshot not available in the loaded payment selection.
+            </p>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
 
 function AdminOrders() {
   const navigate = useNavigate();
 
   const [orders, setOrders] = useState([]);
   const [orderRequests, setOrderRequests] = useState([]);
+  const [paymentSelectionsByRequestId, setPaymentSelectionsByRequestId] =
+    useState(() => new Map());
+  const [paymentSelectionLoadingIds, setPaymentSelectionLoadingIds] =
+    useState(() => new Set());
+  const [paymentSelectionErrorsByRequestId, setPaymentSelectionErrorsByRequestId] =
+    useState({});
   const [loading, setLoading] = useState(true);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -286,6 +499,8 @@ function AdminOrders() {
   const [notice, setNotice] = useState("");
   const [noticeIsError, setNoticeIsError] = useState(false);
   const [copiedOrderId, setCopiedOrderId] = useState("");
+  const [copiedPaymentReference, setCopiedPaymentReference] = useState("");
+  const [receiptPreview, setReceiptPreview] = useState(null);
   const [approvalDialogRequest, setApprovalDialogRequest] = useState(null);
   const [approvalDialogLoading, setApprovalDialogLoading] = useState(false);
   const [approvalDialogError, setApprovalDialogError] = useState("");
@@ -293,6 +508,9 @@ function AdminOrders() {
   const [rejectingRequestId, setRejectingRequestId] = useState(null);
   const [rejectionReason, setRejectionReason] = useState("");
   const [rejectionReasonPreset, setRejectionReasonPreset] = useState("");
+  const [savingProofId, setSavingProofId] = useState(null);
+  const [deliveryProofUrlDrafts, setDeliveryProofUrlDrafts] = useState({});
+  const [currentTime, setCurrentTime] = useState(() => Date.now());
 
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -308,8 +526,21 @@ function AdminOrders() {
   const menuItemsLoadPromise = useRef(null);
   const approvalInProgressIds = useRef(new Set());
   const approvalDialogRef = useRef(null);
+  const receiptDialogRef = useRef(null);
   const orderRequestsUnsubscribeRef = useRef(null);
   const orderRequestsListenerGenerationRef = useRef(0);
+  const orderRequestsRef = useRef([]);
+  const paymentSelectionsByRequestIdRef = useRef(new Map());
+  const paymentSelectionLoadsRef = useRef(new Set());
+  const paymentSelectionsLoadedRef = useRef(false);
+
+  useEffect(() => {
+    const timerId = window.setInterval(
+      () => setCurrentTime(Date.now()),
+      30_000,
+    );
+    return () => window.clearInterval(timerId);
+  }, []);
 
   useEffect(() => {
     const dialog = approvalDialogRef.current;
@@ -322,19 +553,142 @@ function AdminOrders() {
     }
   }, [approvalDialogRequest]);
 
+  useEffect(() => {
+    const dialog = receiptDialogRef.current;
+    if (!dialog) return;
+
+    if (receiptPreview && !dialog.open) {
+      dialog.showModal();
+    } else if (!receiptPreview && dialog.open) {
+      dialog.close();
+    }
+  }, [receiptPreview]);
+
+  const loadRequestPaymentSelections = useCallback(async (requests) => {
+    if (!paymentSelectionsLoadedRef.current) return;
+
+    const missingRequests = requests.filter((request) =>
+      typeof request.id === "string"
+      && request.id
+      && !paymentSelectionsByRequestIdRef.current.has(request.id)
+      && !paymentSelectionLoadsRef.current.has(request.id)
+    );
+    if (missingRequests.length === 0) return;
+
+    const loadingIds = new Set(paymentSelectionLoadsRef.current);
+    missingRequests.forEach(({ id }) => loadingIds.add(id));
+    paymentSelectionLoadsRef.current = loadingIds;
+    setPaymentSelectionLoadingIds(new Set(loadingIds));
+    setPaymentSelectionErrorsByRequestId((currentErrors) => {
+      const nextErrors = { ...currentErrors };
+      missingRequests.forEach(({ id }) => delete nextErrors[id]);
+      return nextErrors;
+    });
+
+    await Promise.all(missingRequests.map(async ({ id }) => {
+      try {
+        const selectionSnapshot = await getDoc(
+          doc(db, "paymentSelections", id),
+        );
+        if (!selectionSnapshot.exists()) {
+          setPaymentSelectionErrorsByRequestId((currentErrors) => ({
+            ...currentErrors,
+            [id]: "Payment selection is missing. Reload the request queue before approving.",
+          }));
+          return;
+        }
+
+        const selection = selectionSnapshot.data();
+        if (selection.method !== "cash" && selection.method !== "qr") {
+          setPaymentSelectionErrorsByRequestId((currentErrors) => ({
+            ...currentErrors,
+            [id]: "Payment method is unavailable. Reload the request queue before approving.",
+          }));
+          return;
+        }
+
+        const paymentDetails = {
+          method: selection.method,
+          timing: selection.timing,
+          paymentReference: selection.paymentReference || "",
+          paymentProofUrl: selection.paymentProofUrl || "",
+          paymentStatus: selection.paymentStatus || "",
+          status: selection.method === "cash"
+            ? "unpaid"
+            : selection.paymentStatus || "not submitted",
+        };
+        const nextSelections = new Map(
+          paymentSelectionsByRequestIdRef.current,
+        );
+        nextSelections.set(id, paymentDetails);
+        paymentSelectionsByRequestIdRef.current = nextSelections;
+        setPaymentSelectionsByRequestId(nextSelections);
+      } catch (loadError) {
+        console.error(
+          `Unable to load payment selection for request ${id}:`,
+          loadError,
+        );
+        setPaymentSelectionErrorsByRequestId((currentErrors) => ({
+          ...currentErrors,
+          [id]: "Unable to load payment details. Retry before approving this request.",
+        }));
+      } finally {
+        const nextLoadingIds = new Set(paymentSelectionLoadsRef.current);
+        nextLoadingIds.delete(id);
+        paymentSelectionLoadsRef.current = nextLoadingIds;
+        setPaymentSelectionLoadingIds(new Set(nextLoadingIds));
+      }
+    }));
+  }, []);
+
   const loadOrders = useCallback(async () => {
     try {
       setError("");
 
-      const ordersSnapshot = await getDocs(
-        collection(db, "orders")
-      );
+      const [ordersSnapshot, paymentDetails] = await Promise.all([
+        getDocs(collection(db, "orders")),
+        loadAdminOrderPaymentDetails(auth.currentUser?.uid),
+      ]);
 
+      const nextPaymentDetails = new Map(
+        paymentSelectionsByRequestIdRef.current,
+      );
+      paymentDetails.forEach((payment, requestId) => {
+        nextPaymentDetails.set(requestId, payment);
+      });
+      paymentSelectionsByRequestIdRef.current = nextPaymentDetails;
+      paymentSelectionsLoadedRef.current = true;
+      setPaymentSelectionsByRequestId(nextPaymentDetails);
+      void loadRequestPaymentSelections(orderRequestsRef.current);
       const ordersList = ordersSnapshot.docs
-        .map((orderDoc) => ({
-          id: orderDoc.id,
-          ...orderDoc.data(),
-        }))
+        .map((orderDoc) => {
+          const order = orderDoc.data();
+          const payment = paymentDetails.get(orderDoc.id);
+          const paymentMethod = order.paymentMethod || payment?.method;
+          const hasCheckoutPaymentData = Boolean(
+            order.paymentReference
+            || order.paymentProofUrl
+            || [
+              "pending_verification",
+              "paid",
+              "needs_review",
+              "rejected",
+            ].includes(order.paymentStatus),
+          );
+          return {
+            id: orderDoc.id,
+            ...order,
+            paymentMethod,
+            paymentTiming: order.paymentTiming || payment?.timing,
+            paymentStatus: paymentMethod === "cash"
+              ? order.cashPaymentStatus || "unpaid"
+              : hasCheckoutPaymentData
+                ? order.paymentStatus
+                  || payment?.status
+                  || "pending_verification"
+                : payment?.status || "not submitted",
+          };
+        })
         .sort((firstOrder, secondOrder) => {
           const firstDate = firstOrder.createdAt?.toDate
             ? firstOrder.createdAt.toDate()
@@ -354,7 +708,7 @@ function AdminOrders() {
       setError("Unable to load orders. Please try again.");
       return false;
     }
-  }, []);
+  }, [loadRequestPaymentSelections]);
 
   const loadBlockedPhones = useCallback(async () => {
     setBlockedPhonesLoading(true);
@@ -412,7 +766,9 @@ function AdminOrders() {
             return secondDate - firstDate;
           });
 
+        orderRequestsRef.current = requestsList;
         setOrderRequests(requestsList);
+        void loadRequestPaymentSelections(requestsList);
         setRequestsError("");
         setRequestsLoading(false);
         setRefreshingRequests(false);
@@ -433,7 +789,7 @@ function AdminOrders() {
 
     orderRequestsUnsubscribeRef.current = unsubscribe;
     return unsubscribe;
-  }, []);
+  }, [loadRequestPaymentSelections]);
 
   const loadMenuItems = useCallback(async () => {
     if (menuItemsById) {
@@ -521,9 +877,11 @@ function AdminOrders() {
 
           const userData = userSnapshot.data();
 
-          if (userData.role !== "admin") {
+          const userRole = getEffectiveRole(userData);
+
+          if (userRole !== "admin" && userRole !== "staff") {
             alert("Access denied. Admin account required.");
-            navigate("/customer");
+            navigate(userRole === "customer" ? "/menu" : "/login");
             return;
           }
 
@@ -617,6 +975,74 @@ function AdminOrders() {
       setCopiedOrderId("");
       setNoticeIsError(true);
       setNotice("Unable to copy Order ID. Please select it manually.");
+    }
+  };
+
+  const handleCopyPaymentReference = async (order) => {
+    try {
+      await navigator.clipboard.writeText(order.paymentReference);
+      setCopiedPaymentReference(order.id);
+      setNoticeIsError(false);
+      setNotice("GCash reference copied.");
+    } catch (copyError) {
+      console.error("Unable to copy GCash reference:", copyError);
+      setCopiedPaymentReference("");
+      setNoticeIsError(true);
+      setNotice("Unable to copy the GCash reference. Please select it manually.");
+    }
+  };
+
+  const handleUpdateQrPaymentStatus = async (order, paymentStatus) => {
+    const reviewerUid = auth.currentUser?.uid;
+    if (!reviewerUid) {
+      setNoticeIsError(true);
+      setNotice("Sign in as staff or an administrator to review GCash payments.");
+      return;
+    }
+    if (
+      paymentStatus === "paid"
+      && (
+        !/^\d{13}$/.test(order.paymentReference || "")
+        || !order.paymentProofUrl
+      )
+    ) {
+      setNoticeIsError(true);
+      setNotice("A 13-digit GCash reference and receipt are required before marking payment verified.");
+      return;
+    }
+    if (
+      paymentStatus === "paid"
+      && !window.confirm(
+        "Has an administrator confirmed that this GCash payment was received?",
+      )
+    ) {
+      return;
+    }
+
+    try {
+      setUpdatingId(order.id);
+      setNotice("");
+      await updateQrOrderPaymentStatus(
+        db,
+        order.id,
+        reviewerUid,
+        paymentStatus,
+      );
+      setOrders((currentOrders) =>
+        currentOrders.map((currentOrder) =>
+          currentOrder.id === order.id
+            ? { ...currentOrder, paymentStatus }
+            : currentOrder
+        )
+      );
+      setNoticeIsError(false);
+      setNotice(`GCash payment status updated: ${getPaymentStatusLabel(paymentStatus)}.`);
+    } catch (updateError) {
+      console.error("Unable to update GCash payment status:", updateError);
+      setNoticeIsError(true);
+      setNotice("Unable to update GCash payment status. Please try again.");
+    } finally {
+      setUpdatingId(null);
     }
   };
 
@@ -764,6 +1190,8 @@ function AdminOrders() {
   };
 
   const handleStatusChange = async (orderId, newStatus) => {
+    const order = orders.find((currentOrder) => currentOrder.id === orderId);
+
     try {
       setUpdatingId(orderId);
       setNoticeIsError(false);
@@ -777,7 +1205,12 @@ function AdminOrders() {
         type: "order",
         newStatus,
         title: "Order status updated",
-        message: (status) => `Your order status is now ${status}.`,
+        message: (status) => (
+          status === "Out for Delivery"
+          && order?.orderType === "delivery"
+            ? `Your delivery order is on the way. Please have the total of ${formatPrice(order.total)} and your payment details ready.`
+            : `Your order status is now ${status}.`
+        ),
       });
 
       if (!result.changed) {
@@ -816,6 +1249,176 @@ function AdminOrders() {
       setNoticeIsError(true);
     } finally {
       setUpdatingId(null);
+    }
+  };
+
+  const handleRecordDeliveryArrival = async (order) => {
+    try {
+      setUpdatingId(order.id);
+      await updateDoc(doc(db, "orders", order.id), {
+        deliveryArrivalAt: serverTimestamp(),
+        deliveryArrivalBy: auth.currentUser.uid,
+      });
+      await loadOrders();
+      setNotice("Delivery arrival recorded. The 10-minute grace period has started.");
+      setNoticeIsError(false);
+    } catch (arrivalError) {
+      console.error("Unable to record delivery arrival:", arrivalError);
+      setNotice(
+        "Unable to record delivery arrival. Verify the order is Out for Delivery, then try again.",
+      );
+      setNoticeIsError(true);
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const handleApplyWaitingFee = async (order) => {
+    if (!canApplyDeliveryWaitingFee(order, Date.now())) {
+      setNotice(
+        "The one-time waiting fee is available only for delivery orders after the 10-minute grace period.",
+      );
+      setNoticeIsError(true);
+      return;
+    }
+
+    try {
+      setUpdatingId(order.id);
+      await updateDoc(doc(db, "orders", order.id), {
+        waitingFee: DELIVERY_WAITING_FEE,
+        waitingFeeApplied: true,
+        waitingFeeAppliedAt: serverTimestamp(),
+        waitingFeeAppliedBy: auth.currentUser.uid,
+      });
+      await loadOrders();
+      setNotice("The one-time ₱20 waiting fee was added to this order.");
+      setNoticeIsError(false);
+    } catch (feeError) {
+      console.error("Unable to apply delivery waiting fee:", feeError);
+      setNotice(
+        "Unable to apply the waiting fee. Confirm the 10-minute grace period has elapsed and try again.",
+      );
+      setNoticeIsError(true);
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const handleMarkUnreachable = async (order) => {
+    const gracePeriod = getDeliveryGracePeriod(order, Date.now());
+    if (
+      normalizeOrderType(order.orderType) !== "delivery"
+      || order.paymentMethod !== "cash"
+      || order.cashPaymentStatus === "paid"
+      || order.status !== "Out for Delivery"
+      || !gracePeriod?.elapsed
+    ) {
+      setNotice(
+        "Only an unpaid cash delivery can be marked Unreachable after the 10-minute grace period.",
+      );
+      setNoticeIsError(true);
+      return;
+    }
+
+    if (!window.confirm(
+      "Mark this cash delivery as Unreachable? The one-time ₱20 waiting fee will be recorded if it has not already been applied."
+    )) {
+      return;
+    }
+
+    try {
+      setUpdatingId(order.id);
+      const batch = writeBatch(db);
+      const alreadyCharged = hasDeliveryWaitingFee(order);
+      const orderUpdate = {
+        status: "Unreachable",
+        unreachableAt: serverTimestamp(),
+        unreachableBy: auth.currentUser.uid,
+        unreachableReason: UNREACHABLE_ORDER_REASON,
+      };
+
+      if (!alreadyCharged) {
+        orderUpdate.waitingFee = DELIVERY_WAITING_FEE;
+        orderUpdate.waitingFeeApplied = true;
+        orderUpdate.waitingFeeAppliedAt = serverTimestamp();
+        orderUpdate.waitingFeeAppliedBy = auth.currentUser.uid;
+      } else if (order.waitingFeeApplied !== true) {
+        orderUpdate.waitingFeeApplied = true;
+      }
+
+      batch.update(doc(db, "orders", order.id), orderUpdate);
+      const customerId = order.customerId || order.userId;
+      if (typeof customerId === "string" && customerId.trim()) {
+        const notificationRef = doc(collection(db, "notifications"));
+        batch.set(notificationRef, {
+          userId: customerId,
+          type: "order",
+          itemId: order.id,
+          title: "We could not reach you for your delivery",
+          message: `${UNREACHABLE_ORDER_REASON} Please contact the cafe to arrange next steps.`,
+          isRead: false,
+          createdAt: serverTimestamp(),
+        });
+      }
+
+      await batch.commit();
+      await loadOrders();
+      setNotice("Order marked Unreachable and the one-time waiting fee recorded.");
+      setNoticeIsError(false);
+    } catch (unreachableError) {
+      console.error("Unable to mark delivery as unreachable:", unreachableError);
+      setNotice(
+        "Unable to mark this delivery Unreachable. Verify the 10-minute grace period and try again.",
+      );
+      setNoticeIsError(true);
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const handleDeliveryProofSave = async (order) => {
+    const proofUrl = normalizeDeliveryProofUrl(
+      deliveryProofUrlDrafts[order.id] || "",
+    );
+    if (!proofUrl) {
+      setNotice("Enter a valid HTTPS link to the delivery photo.");
+      setNoticeIsError(true);
+      return;
+    }
+    if (order.deliveryProofUrl) {
+      setNotice("This order already has Proof of Delivery recorded.");
+      setNoticeIsError(true);
+      return;
+    }
+
+    const staffId = auth.currentUser?.uid;
+    if (!staffId) {
+      setNotice("Your staff session could not be verified. Please sign in again.");
+      setNoticeIsError(true);
+      return;
+    }
+
+    try {
+      setSavingProofId(order.id);
+      setNotice("");
+      await updateDoc(doc(db, "orders", order.id), {
+        deliveryProofUrl: proofUrl,
+        deliveryProofRecordedAt: serverTimestamp(),
+        deliveryProofRecordedBy: staffId,
+      });
+      await loadOrders();
+      setDeliveryProofUrlDrafts((drafts) => ({
+        ...drafts,
+        [order.id]: "",
+      }));
+      setNotice("Proof of Delivery photo link saved to this order.");
+      setNoticeIsError(false);
+    } catch (saveError) {
+      console.error("Unable to save Proof of Delivery link:", saveError);
+      setNotice("Unable to save the photo link. Verify the order status and try again.");
+      setNoticeIsError(true);
+    } finally {
+      setSavingProofId(null);
     }
   };
 
@@ -939,13 +1542,55 @@ function AdminOrders() {
   };
 
   const approvalPricing = approvalDialogRequest
-    ? getApprovalPricing(approvalDialogRequest, menuItemsById)
+    ? getOrderApprovalPricing(
+      approvalDialogRequest,
+      menuItemsById,
+      getApprovalPricing,
+    )
     : null;
+  const getRequestPaymentDetails = (request) => {
+    const selection = paymentSelectionsByRequestId.get(request?.id);
+    return {
+      method: request?.paymentMethod || selection?.method,
+      paymentReference:
+        request?.paymentReference || selection?.paymentReference || "",
+      paymentProofUrl:
+        request?.paymentProofUrl || selection?.paymentProofUrl || "",
+      paymentStatus:
+        request?.paymentStatus
+        || selection?.paymentStatus
+        || selection?.status
+        || "pending_verification",
+    };
+  };
+  const approvalDialogPayment = getRequestPaymentDetails(approvalDialogRequest);
+  const approvalDialogIsQr = approvalDialogPayment.method === "qr";
 
   const handleConfirmApproval = async () => {
+    if (!approvalDialogRequest) return;
+
+    const payment = getRequestPaymentDetails(approvalDialogRequest);
+    if (!payment.method) {
+      setApprovalDialogError(
+        "Payment details are still loading or unavailable. Load the request payment selection before approving.",
+      );
+      return;
+    }
     if (
-      !approvalDialogRequest
-      || !approvalPricing
+      payment.method === "qr"
+      && (
+        !/^\d{13}$/.test(payment.paymentReference)
+        || !payment.paymentProofUrl
+      )
+    ) {
+      setApprovalDialogError(
+        "GCash reference and receipt details are unavailable. Reload the page before approving this request.",
+      );
+      return;
+    }
+
+    if (
+      !approvalPricing
       || approvalPricing.errors.length > 0
       || approvalDialogLoading
       || approvingRequestId
@@ -1090,19 +1735,6 @@ function AdminOrders() {
     }
   };
 
-  if (loading) {
-    return (
-      <main className="admin-orders-page">
-        <section className="admin-orders-loading">
-          <div className="loading-icon">📦</div>
-          <p className="admin-orders-eyebrow">CACTUS CAFE</p>
-          <h1>Loading order workspace</h1>
-          <div className="loading-bar" />
-        </section>
-      </main>
-    );
-  }
-
   return (
     <main className="admin-orders-page">
       {mobileNavigationOpen && (
@@ -1125,85 +1757,19 @@ function AdminOrders() {
           className="admin-orders-brand"
           onClick={() => setMobileNavigationOpen(false)}
         >
-          <span className="admin-orders-brand-mark" aria-hidden="true">🌵</span>
+          <span className="admin-orders-brand-mark" aria-hidden="true">C</span>
           <span>
             <strong>Cactus Café</strong>
-            <small>ADMIN WORKSPACE</small>
+            <small>STAFF WORKSPACE</small>
           </span>
         </NavLink>
 
         <div className="admin-orders-sidebar-label">WORKSPACE</div>
         <nav className="admin-orders-nav">
-          <NavLink
-            to="/admin/menu"
-            className={({ isActive }) =>
-              `admin-orders-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-orders-nav-icon" aria-hidden="true">▦</span>
-            <span>Menu Management</span>
-          </NavLink>
-          <NavLink
-            to="/admin/orders"
-            className={({ isActive }) =>
-              `admin-orders-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-orders-nav-icon" aria-hidden="true">↗</span>
-            <span>Orders</span>
-          </NavLink>
-          <NavLink
-            to="/admin/payments"
-            className={({ isActive }) =>
-              `admin-orders-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-orders-nav-icon" aria-hidden="true">₱</span>
-            <span>Payment Management</span>
-          </NavLink>
-          <NavLink
-            to="/admin/reservations"
-            className={({ isActive }) =>
-              `admin-orders-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-orders-nav-icon" aria-hidden="true">◷</span>
-            <span>Reservations</span>
-          </NavLink>
-          <NavLink
-            to="/admin/reviews"
-            className={({ isActive }) =>
-              `admin-orders-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-orders-nav-icon" aria-hidden="true">☆</span>
-            <span>Reviews</span>
-          </NavLink>
-          <NavLink
-            to="/admin/users"
-            className={({ isActive }) =>
-              `admin-orders-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-orders-nav-icon" aria-hidden="true">◎</span>
-            <span>Customers &amp; Security</span>
-          </NavLink>
-          <NavLink
-            to="/admin/monthly-records"
-            className={({ isActive }) =>
-              `admin-orders-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-orders-nav-icon" aria-hidden="true">▤</span>
-            <span>Monthly Records</span>
-          </NavLink>
+          <AdminWorkspaceNavigation
+            classPrefix="admin-orders"
+            onNavigate={() => setMobileNavigationOpen(false)}
+          />
         </nav>
 
         <div className="admin-orders-sidebar-footer">
@@ -1253,6 +1819,10 @@ function AdminOrders() {
           </div>
         </header>
 
+        {loading ? (
+          <AdminLoadingSkeleton label="Loading orders" stats={4} rows={5} />
+        ) : (
+          <>
         <div
           className="admin-orders-view-switcher"
           role="tablist"
@@ -1291,7 +1861,7 @@ function AdminOrders() {
               onClick={loadBlockedPhones}
               disabled={blockedPhonesLoading}
             >
-              {blockedPhonesLoading ? "Checking..." : "Try again"}
+              Try again
             </button>
           </div>
         )}
@@ -1506,9 +2076,11 @@ function AdminOrders() {
           )}
 
           {!requestsError && requestsLoading && (
-            <div className="request-state" role="status" aria-busy="true">
-              Loading customer requests...
-            </div>
+            <AdminLoadingSkeleton
+              label="Loading customer requests"
+              compact
+              rows={3}
+            />
           )}
 
           {!requestsError && !requestsLoading && orderRequests.length === 0 && (
@@ -1543,6 +2115,28 @@ function AdminOrders() {
                 const requestItems = Array.isArray(request.items)
                   ? request.items
                   : [];
+                const requestPayment = getRequestPaymentDetails(request);
+                const isQrRequest = requestPayment.method === "qr";
+                const paymentSelectionLoading =
+                  paymentSelectionLoadingIds.has(request.id);
+                const paymentSelectionError =
+                  paymentSelectionErrorsByRequestId[request.id];
+                const requestPricingEstimate = menuItemsById
+                  ? getOrderApprovalPricing(
+                    request,
+                    menuItemsById,
+                    getApprovalPricing,
+                  )
+                  : null;
+                const savedRequestTotal = typeof request.total === "number"
+                  ? request.total
+                  : typeof request.total === "string"
+                    && request.total.trim()
+                    ? Number(request.total)
+                    : Number.NaN;
+                const requestOrderTotal = Number.isFinite(savedRequestTotal)
+                  ? savedRequestTotal
+                  : requestPricingEstimate?.total;
 
                 return (
                   <article className="request-card" key={request.id}>
@@ -1652,12 +2246,11 @@ function AdminOrders() {
                             {expandedRequestIds.has(request.id) && (
                               <div className="request-pricing-content">
                                 {menuItemsLoading && (
-                                  <p
-                                    className="request-pricing-state"
-                                    role="status"
-                                  >
-                                    Loading current menu prices...
-                                  </p>
+                                  <AdminLoadingSkeleton
+                                    label="Loading current menu prices"
+                                    compact
+                                    rows={2}
+                                  />
                                 )}
 
                                 {!menuItemsLoading && menuItemsError && (
@@ -1760,9 +2353,23 @@ function AdminOrders() {
                                             || item.subtotal === null
                                           )
                                       );
+                                    const expectedDeliveryFee =
+                                      request.orderType === "delivery"
+                                        ? getDeliveryFeeForBarangay(
+                                          request.deliveryBarangay,
+                                        )
+                                        : 0;
+                                    const hasInvalidDeliveryFee =
+                                      request.orderType === "delivery"
+                                      && expectedDeliveryFee
+                                        !== request.deliveryFee;
                                     const canShowTotal =
                                       canCalculateTotal
-                                      && Number.isFinite(estimatedTotal);
+                                      && Number.isFinite(estimatedTotal)
+                                      && !hasInvalidDeliveryFee;
+                                    const estimatedGrandTotal = canShowTotal
+                                      ? estimatedTotal + expectedDeliveryFee
+                                      : null;
 
                                     return (
                                       <>
@@ -1791,6 +2398,13 @@ function AdminOrders() {
                                                 are invalid, so a complete
                                                 estimated total cannot be
                                                 calculated.
+                                              </p>
+                                            )}
+                                            {hasInvalidDeliveryFee && (
+                                              <p>
+                                                The delivery barangay or fee
+                                                does not match the café&apos;s
+                                                delivery fee schedule.
                                               </p>
                                             )}
                                           </div>
@@ -1836,13 +2450,34 @@ function AdminOrders() {
                                             </div>
                                           ))}
                                           <div className="request-pricing-total">
-                                            <span>Estimated total</span>
+                                            <span>Items subtotal</span>
                                             <strong>
                                               {canShowTotal
                                                 ? formatPrice(estimatedTotal)
                                                 : "Unavailable"}
                                             </strong>
                                           </div>
+                                          {request.orderType === "delivery" && (
+                                            <>
+                                              <div className="request-pricing-total">
+                                                <span>Delivery fee</span>
+                                                <strong>
+                                                  {expectedDeliveryFee === null
+                                                    || hasInvalidDeliveryFee
+                                                    ? "Unavailable"
+                                                    : formatPrice(expectedDeliveryFee)}
+                                                </strong>
+                                              </div>
+                                              <div className="request-pricing-total">
+                                                <span>Estimated total</span>
+                                                <strong>
+                                                  {estimatedGrandTotal === null
+                                                    ? "Unavailable"
+                                                    : formatPrice(estimatedGrandTotal)}
+                                                </strong>
+                                              </div>
+                                            </>
+                                          )}
                                         </div>
                                         {hasUnavailableItems && canShowTotal && (
                                           <p className="request-pricing-note">
@@ -1876,6 +2511,44 @@ function AdminOrders() {
                           </p>
                         )}
                       </section>
+                      {isQrRequest && (
+                        <RequestQrPaymentDetails
+                          orderId={request.id}
+                          payment={requestPayment}
+                          total={requestOrderTotal}
+                          copiedPaymentReference={copiedPaymentReference}
+                          onCopyReference={handleCopyPaymentReference}
+                          onOpenReceipt={setReceiptPreview}
+                        />
+                      )}
+                      {!requestPayment.method && (
+                        <div
+                          className="request-payment-selection-state"
+                          role={paymentSelectionError ? "alert" : "status"}
+                        >
+                          <strong>
+                            {paymentSelectionLoading
+                              ? "Loading payment details"
+                              : "Payment details unavailable"}
+                          </strong>
+                          <p>
+                            {paymentSelectionError
+                              || "Approval is disabled until the saved payment method loads."}
+                          </p>
+                          {paymentSelectionError && (
+                            <button
+                              type="button"
+                              className="request-payment-retry"
+                              disabled={paymentSelectionLoading}
+                              onClick={() =>
+                                loadRequestPaymentSelections([request])
+                              }
+                            >
+                              Retry payment details
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     {status === "pending" && (
@@ -1885,16 +2558,19 @@ function AdminOrders() {
                           className="request-pricing-toggle"
                           disabled={
                             approvalDialogLoading
+                            || !requestPayment.method
+                            || paymentSelectionLoading
                             || Boolean(approvingRequestId || rejectingRequestId)
                           }
                           onClick={() => handleOpenApprovalDialog(request)}
                         >
-                          {approvingRequestId === request.id
-                            ? "Approving..."
-                            : approvalDialogLoading
-                              && approvalDialogRequest?.id === request.id
-                              ? "Loading current prices..."
-                              : "Approve request"}
+                          {paymentSelectionLoading
+                            ? "Loading payment details..."
+                            : paymentSelectionError
+                              ? "Payment details unavailable"
+                              : approvingRequestId === request.id
+                                ? "Approving..."
+                                : "Approve request"}
                         </button>
                       </div>
                     )}
@@ -1936,10 +2612,61 @@ function AdminOrders() {
                 </p>
               </div>
 
+              {approvalDialogIsQr && (
+                <RequestQrPaymentDetails
+                  orderId={approvalDialogRequest.id}
+                  payment={approvalDialogPayment}
+                  total={approvalPricing?.total}
+                  totalUnavailableLabel="Unavailable"
+                  copiedPaymentReference={copiedPaymentReference}
+                  onCopyReference={handleCopyPaymentReference}
+                  onOpenReceipt={setReceiptPreview}
+                />
+              )}
+              {!approvalDialogPayment.method && (
+                <div
+                  className="request-payment-selection-state"
+                  role={
+                    paymentSelectionErrorsByRequestId[approvalDialogRequest.id]
+                      ? "alert"
+                      : "status"
+                  }
+                >
+                  <strong>
+                    {paymentSelectionLoadingIds.has(approvalDialogRequest.id)
+                      ? "Loading payment details"
+                      : "Payment details unavailable"}
+                  </strong>
+                  <p>
+                    {paymentSelectionErrorsByRequestId[
+                      approvalDialogRequest.id
+                    ] || "Approval is disabled until the saved payment method loads."}
+                  </p>
+                  {paymentSelectionErrorsByRequestId[
+                    approvalDialogRequest.id
+                  ] && (
+                    <button
+                      type="button"
+                      className="request-payment-retry"
+                      disabled={paymentSelectionLoadingIds.has(
+                        approvalDialogRequest.id,
+                      )}
+                      onClick={() =>
+                        loadRequestPaymentSelections([approvalDialogRequest])
+                      }
+                    >
+                      Retry payment details
+                    </button>
+                  )}
+                </div>
+              )}
+
               {approvalDialogLoading && (
-                <p className="request-pricing-state" role="status">
-                  Loading current menu prices...
-                </p>
+                <AdminLoadingSkeleton
+                  label="Loading current menu prices"
+                  compact
+                  rows={2}
+                />
               )}
 
               {approvalDialogError && (
@@ -2037,6 +2764,24 @@ function AdminOrders() {
                       </div>
                     ))}
                     <div className="request-pricing-total">
+                      <span>Items subtotal</span>
+                      <strong>
+                        {approvalPricing.itemsSubtotal === null
+                          ? "Unavailable"
+                          : formatPrice(approvalPricing.itemsSubtotal)}
+                      </strong>
+                    </div>
+                    {approvalDialogRequest.orderType === "delivery" && (
+                      <div className="request-pricing-total">
+                        <span>Delivery fee</span>
+                        <strong>
+                          {approvalPricing.deliveryFee === null
+                            ? "Unavailable"
+                            : formatPrice(approvalPricing.deliveryFee)}
+                        </strong>
+                      </div>
+                    )}
+                    <div className="request-pricing-total">
                       <span>Estimated total</span>
                       <strong>
                         {approvalPricing.total === null
@@ -2067,6 +2812,19 @@ function AdminOrders() {
                     approvalDialogLoading
                     || !approvalPricing
                     || approvalPricing.errors.length > 0
+                    || !approvalDialogPayment.method
+                    || paymentSelectionLoadingIds.has(
+                      approvalDialogRequest.id,
+                    )
+                    || (
+                      approvalDialogIsQr
+                      && (
+                        !/^\d{13}$/.test(
+                          approvalDialogPayment.paymentReference,
+                        )
+                        || !approvalDialogPayment.paymentProofUrl
+                      )
+                    )
                     || Boolean(approvingRequestId || rejectingRequestId)
                   }
                   onClick={handleConfirmApproval}
@@ -2084,6 +2842,65 @@ function AdminOrders() {
                   Cancel
                 </button>
               </div>
+            </div>
+          )}
+        </dialog>
+
+        <dialog
+          ref={receiptDialogRef}
+          className="order-receipt-dialog"
+          aria-labelledby="order-receipt-dialog-title"
+          onClose={() => setReceiptPreview(null)}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              receiptDialogRef.current?.close();
+            }
+          }}
+        >
+          {receiptPreview && (
+            <div className="order-receipt-dialog-card">
+              <header>
+                <div>
+                  <p>GCASH PAYMENT RECEIPT</p>
+                  <h2 id="order-receipt-dialog-title">
+                    Order {receiptPreview.orderId}
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  className="order-receipt-dialog-close"
+                  onClick={() => receiptDialogRef.current?.close()}
+                  aria-label="Close GCash receipt preview"
+                >
+                  Close
+                </button>
+              </header>
+              <div className="order-receipt-dialog-meta">
+                {receiptPreview.reference && (
+                  <span>
+                    Reference <strong>{receiptPreview.reference}</strong>
+                  </span>
+                )}
+                <span>
+                  Order total{" "}
+                  <strong>
+                    {Number.isFinite(receiptPreview.total)
+                      ? formatPrice(receiptPreview.total)
+                      : "Unavailable"}
+                  </strong>
+                </span>
+              </div>
+              <img
+                src={receiptPreview.url}
+                alt={`GCash receipt for order ${receiptPreview.orderId}`}
+              />
+              <a
+                href={receiptPreview.url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open original in a new tab
+              </a>
             </div>
           )}
         </dialog>
@@ -2249,6 +3066,18 @@ function AdminOrders() {
               const orderItems = Array.isArray(order.items)
                 ? order.items
                 : [];
+              const gracePeriod = getDeliveryGracePeriod(order, currentTime);
+              const waitingFeeRecorded = hasDeliveryWaitingFee(order);
+              const isUnpaidCashOrder =
+                order.paymentMethod === "cash"
+                && order.cashPaymentStatus !== "paid";
+              const canReviewQrPayment =
+                order.paymentMethod === "qr"
+                && [
+                  "pending_verification",
+                  "needs_review",
+                  "rejected",
+                ].includes(order.paymentStatus);
 
               return (
                 <article
@@ -2353,7 +3182,7 @@ function AdminOrders() {
 
                     <div>
                       <span className="order-label">
-                        TOTAL
+                        {isUnpaidCashOrder ? "CASH AMOUNT DUE" : "TOTAL"}
                       </span>
 
                       <strong className="order-total">
@@ -2430,7 +3259,8 @@ function AdminOrders() {
                         order.pickupTime ||
                         order.tableNumber ||
                         order.notes ||
-                        order.paymentMethod) && (
+                        order.paymentMethod ||
+                        order.orderType === "delivery") && (
                         <div className="order-extra-details">
                           {order.address && (
                             <div>
@@ -2461,7 +3291,178 @@ function AdminOrders() {
                             <div>
                               <span>Payment method</span>
                               <strong>
-                                {order.paymentMethod}
+                                {getPaymentMethodLabel(order.paymentMethod)}
+                              </strong>
+                            </div>
+                          )}
+
+                          {order.paymentMethod && order.paymentMethod !== "qr" && (
+                            <div>
+                              <span>Payment status</span>
+                              <strong
+                                className={`order-payment-status order-payment-status-${getPaymentStatusClass(order.paymentStatus)}`}
+                              >
+                                {getPaymentStatusLabel(order.paymentStatus)}
+                              </strong>
+                            </div>
+                          )}
+
+                          {order.paymentMethod === "qr" && (
+                            <div className="order-gcash-review order-gcash-order-card">
+                              <div className="order-gcash-topbar">
+                                <div className="order-gcash-total">
+                                  <span>Order Total</span>
+                                  <strong>{formatPrice(order.total)}</strong>
+                                </div>
+                                <div className="order-gcash-status">
+                                  <span>Payment status</span>
+                                  <div>
+                                    <strong
+                                      className={`order-payment-status order-payment-status-${getPaymentStatusClass(order.paymentStatus || "pending_verification")}`}
+                                    >
+                                      {(order.paymentStatus || "pending_verification") === "pending_verification"
+                                        ? "Pending GCash Check"
+                                        : getPaymentStatusLabel(order.paymentStatus)}
+                                    </strong>
+                                    <code>
+                                      {order.paymentStatus || "pending_verification"}
+                                    </code>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="order-gcash-details-grid">
+                                {order.paymentReference && (
+                                  <div className="order-gcash-reference">
+                                    <span>13-digit GCash Reference Number</span>
+                                    <div className="order-gcash-reference-row">
+                                      <code>{order.paymentReference}</code>
+                                      <button
+                                        type="button"
+                                        className={`order-gcash-copy${copiedPaymentReference === order.id ? " is-copied" : ""}`}
+                                        onClick={() =>
+                                          handleCopyPaymentReference(order)
+                                        }
+                                        aria-label={
+                                          copiedPaymentReference === order.id
+                                            ? "GCash reference copied"
+                                            : `Copy GCash reference ${order.paymentReference}`
+                                        }
+                                      >
+                                        {copiedPaymentReference === order.id
+                                          ? "Copied!"
+                                          : "Copy"}
+                                      </button>
+                                    </div>
+                                    <p className="order-gcash-verification-note">
+                                      Before approving, confirm this reference
+                                      and the exact order total were received in
+                                      GCash.
+                                    </p>
+                                  </div>
+                                )}
+
+                                {order.paymentProofUrl && (
+                                  <div className="order-gcash-receipt">
+                                    <span>Receipt Screenshot</span>
+                                    <div className="order-gcash-receipt-actions">
+                                      <button
+                                        type="button"
+                                        className="order-payment-proof-preview"
+                                        onClick={() => setReceiptPreview({
+                                          orderId: order.id,
+                                          reference: order.paymentReference || "",
+                                          total: order.total,
+                                          url: order.paymentProofUrl,
+                                        })}
+                                        aria-label={`Enlarge GCash receipt for order ${order.id}`}
+                                      >
+                                        <img
+                                          src={order.paymentProofUrl}
+                                          alt="Customer GCash receipt preview"
+                                        />
+                                        <span>Enlarge receipt</span>
+                                      </button>
+                                      <a
+                                        className="order-payment-proof-link"
+                                        href={order.paymentProofUrl}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                      >
+                                        Open original
+                                      </a>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+
+                              {canReviewQrPayment && (
+                                <div className="order-gcash-actions">
+                                  <div>
+                                    <button
+                                      type="button"
+                                      className="order-gcash-action is-verified"
+                                      disabled={
+                                        Boolean(updatingId)
+                                        || !/^\d{13}$/.test(
+                                          order.paymentReference || "",
+                                        )
+                                        || !order.paymentProofUrl
+                                      }
+                                      onClick={() =>
+                                        handleUpdateQrPaymentStatus(
+                                          order,
+                                          "paid",
+                                        )
+                                      }
+                                    >
+                                      {updatingId === order.id
+                                        ? "Saving..."
+                                        : "Mark verified"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="order-gcash-action is-review"
+                                      disabled={
+                                        Boolean(updatingId)
+                                        || order.paymentStatus === "needs_review"
+                                      }
+                                      onClick={() =>
+                                        handleUpdateQrPaymentStatus(
+                                          order,
+                                          "needs_review",
+                                        )
+                                      }
+                                    >
+                                      Needs review
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="order-gcash-action is-rejected"
+                                      disabled={
+                                        Boolean(updatingId)
+                                        || order.paymentStatus === "rejected"
+                                      }
+                                      onClick={() =>
+                                        handleUpdateQrPaymentStatus(
+                                          order,
+                                          "rejected",
+                                        )
+                                      }
+                                    >
+                                      Reject payment
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {order.orderType === "delivery" && (
+                            <div>
+                              <span>Delivery barangay</span>
+                              <strong>
+                                {order.deliveryBarangay || "Not recorded"}
                               </strong>
                             </div>
                           )}
@@ -2476,11 +3477,172 @@ function AdminOrders() {
                       )}
 
                       <div className="details-total">
-                        <span>Order total</span>
-                        <strong>
-                          {formatPrice(getTotal(order))}
-                        </strong>
+                        <div className="order-price-breakdown">
+                          <span>Items subtotal</span>
+                          <strong>
+                            {formatPrice(
+                              order.itemsSubtotal ?? (Number(order.total || 0) - Number(order.deliveryFee || 0)),
+                            )}
+                          </strong>
+                        </div>
+                        {order.orderType === "delivery" && (
+                          <div className="order-price-breakdown">
+                            <span>Delivery fee</span>
+                            <strong>{formatPrice(order.deliveryFee)}</strong>
+                          </div>
+                        )}
+                        {waitingFeeRecorded && (
+                          <div className="order-price-breakdown">
+                            <span>Waiting fee</span>
+                            <strong>{formatPrice(DELIVERY_WAITING_FEE)}</strong>
+                          </div>
+                        )}
+                        <div className="order-price-breakdown is-total">
+                          <span>
+                            {isUnpaidCashOrder
+                              ? "Cash amount due"
+                              : "Total due"}
+                          </span>
+                          <strong>{formatPrice(getTotal(order))}</strong>
+                        </div>
                       </div>
+
+                      {order.orderType === "delivery" && (
+                        <section className="delivery-operations" aria-label="Delivery operations">
+                          <h4>Delivery handoff</h4>
+                          {order.deliveryArrivalAt?.toDate ? (
+                            <>
+                              <p>
+                                Arrival recorded: {formatDate(order.deliveryArrivalAt)}.
+                                The 10-minute grace period ends at{" "}
+                                {new Date(
+                                  order.deliveryArrivalAt.toDate().getTime()
+                                    + 10 * 60 * 1000,
+                                ).toLocaleTimeString("en-PH", {
+                                  hour: "numeric",
+                                  minute: "2-digit",
+                                })}
+                                .
+                              </p>
+                              <p className="delivery-grace-status" role="status">
+                                {gracePeriod?.elapsed
+                                  ? "The 10-minute grace period has elapsed."
+                                  : `Grace time remaining: ${formatDeliveryGraceRemaining(
+                                    gracePeriod?.remainingMs ?? 0,
+                                  )}.`}
+                              </p>
+                              {waitingFeeRecorded ? (
+                                <p role="status">
+                                  One-time ₱20 waiting fee recorded.
+                                </p>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="refresh-button"
+                                  disabled={
+                                    updatingId === order.id
+                                    || !canApplyDeliveryWaitingFee(
+                                      order,
+                                      currentTime,
+                                    )
+                                  }
+                                  onClick={() => handleApplyWaitingFee(order)}
+                                >
+                                  Add one-time ₱20 waiting fee
+                                </button>
+                              )}
+                              {status === "Out for Delivery"
+                                && isUnpaidCashOrder
+                                && gracePeriod?.elapsed && (
+                                  <button
+                                    type="button"
+                                    className="unreachable-order-button"
+                                    disabled={updatingId === order.id}
+                                    onClick={() => handleMarkUnreachable(order)}
+                                  >
+                                    {waitingFeeRecorded
+                                      ? "Mark Unreachable"
+                                      : "Apply ₱20 fee & mark Unreachable"}
+                                  </button>
+                                )}
+                            </>
+                          ) : (
+                            <>
+                              <p>
+                                Record arrival when the rider reaches the customer.
+                                The one-time ₱20 waiting fee may only be added after
+                                the 10-minute grace period.
+                              </p>
+                              {status === "Out for Delivery" && (
+                                <button
+                                  type="button"
+                                  className="refresh-button"
+                                  disabled={updatingId === order.id}
+                                  onClick={() => handleRecordDeliveryArrival(order)}
+                                >
+                                  Record customer arrival
+                                </button>
+                              )}
+                            </>
+                          )}
+
+                          {order.deliveryProofUrl ? (
+                            <div className="delivery-proof-preview">
+                              <strong>Proof of Delivery</strong>
+                              <DeliveryProofPreview
+                                key={order.deliveryProofUrl}
+                                proofUrl={order.deliveryProofUrl}
+                              />
+                            </div>
+                          ) : ["Out for Delivery", "Completed"].includes(status) ? (
+                            <form
+                              className="delivery-proof-upload"
+                              onSubmit={(event) => {
+                                event.preventDefault();
+                                handleDeliveryProofSave(order);
+                              }}
+                            >
+                              <label htmlFor={`delivery-proof-${order.id}`}>
+                                Proof of Delivery photo URL
+                              </label>
+                              <input
+                                id={`delivery-proof-${order.id}`}
+                                type="url"
+                                inputMode="url"
+                                autoComplete="url"
+                                maxLength={2048}
+                                placeholder="https://example.com/delivery-photo.jpg"
+                                value={deliveryProofUrlDrafts[order.id] || ""}
+                                disabled={savingProofId === order.id}
+                                onChange={(event) => {
+                                  const { value } = event.target;
+                                  setDeliveryProofUrlDrafts((drafts) => ({
+                                    ...drafts,
+                                    [order.id]: value,
+                                  }));
+                                }}
+                              />
+                              <small>
+                                Enter a publicly accessible HTTPS image link.
+                              </small>
+                              <button
+                                type="submit"
+                                className="refresh-button"
+                                disabled={savingProofId === order.id}
+                              >
+                                {savingProofId === order.id
+                                  ? "Saving photo link..."
+                                  : "Save Proof of Delivery link"}
+                              </button>
+                            </form>
+                          ) : (
+                            <p>
+                              Proof recording becomes available when the order is
+                              Out for Delivery.
+                            </p>
+                          )}
+                        </section>
+                      )}
                     </div>
                   </details>
 
@@ -2532,6 +3694,8 @@ function AdminOrders() {
         )}
           </>,
           ordersSectionTarget
+        )}
+          </>
         )}
       </div>
       </div>

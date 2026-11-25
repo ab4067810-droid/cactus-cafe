@@ -4,16 +4,21 @@ import {
   doc,
   getDoc,
   getDocs,
+  serverTimestamp,
+  writeBatch,
 } from "firebase/firestore";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { NavLink, useNavigate } from "react-router-dom";
 
+import AdminWorkspaceNavigation from "../components/AdminWorkspaceNavigation";
+import AdminLoadingSkeleton from "../components/AdminLoadingSkeleton";
 import { auth, db } from "../services/firebase";
+import { getEffectiveRole } from "../utils/userRole";
 import { maskCustomerName } from "../utils/maskCustomerName";
 import "../styles/AdminReviews.css";
 import "../styles/AdminSidebar.css";
 
-const REVIEW_STATUSES = ["All", "Pending", "Approved", "Rejected"];
+const REVIEW_STATUSES = ["All", "Pending", "Approved", "Rejected", "Hidden"];
 
 const formatDate = (timestamp) => {
   if (!timestamp?.toDate) {
@@ -120,6 +125,7 @@ function AdminReviews() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [moderatingIds, setModeratingIds] = useState(() => new Set());
 
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -180,9 +186,14 @@ function AdminReviews() {
 
           const userData = userSnapshot.data();
 
-          if (userData.role !== "admin") {
+          const userRole = getEffectiveRole(userData);
+
+          if (userRole !== "admin") {
             alert("Access denied. Admin account required.");
-            navigate("/customer", { replace: true });
+            navigate(
+              userRole === "staff" ? "/admin/orders" : "/menu",
+              { replace: true },
+            );
             return;
           }
 
@@ -275,6 +286,47 @@ function AdminReviews() {
     }
   };
 
+  const handleHideReview = async (review) => {
+    if (moderatingIds.has(review.id)) return;
+
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      setError("Sign in again before moderating reviews.");
+      return;
+    }
+
+    setModeratingIds((current) => new Set(current).add(review.id));
+    setError("");
+    setNotice("");
+
+    try {
+      const batch = writeBatch(db);
+      batch.update(doc(db, "reviews", review.id), {
+        status: "Hidden",
+        moderatedAt: serverTimestamp(),
+        moderatedBy: currentUser.uid,
+      });
+      batch.delete(doc(db, "publicReviews", review.id));
+      await batch.commit();
+
+      setReviews((current) => current.map((item) =>
+        item.id === review.id
+          ? { ...item, status: "Hidden" }
+          : item
+      ));
+      setNotice("Review hidden and removed from the public site.");
+    } catch (moderationError) {
+      console.error("Error hiding customer review:", moderationError);
+      setError("Unable to hide this review. Please try again.");
+    } finally {
+      setModeratingIds((current) => {
+        const next = new Set(current);
+        next.delete(review.id);
+        return next;
+      });
+    }
+  };
+
   const handleLogout = async () => {
     if (loggingOut) return;
 
@@ -288,21 +340,6 @@ function AdminReviews() {
       setLoggingOut(false);
     }
   };
-
-  if (loading) {
-    return (
-      <main className="admin-reviews-page">
-        <section className="admin-reviews-loading">
-          <div className="loading-icon">◷</div>
-          <p className="admin-reviews-eyebrow">
-            CACTUS CAFE
-          </p>
-          <h1>Loading review workspace</h1>
-          <div className="loading-bar" />
-        </section>
-      </main>
-    );
-  }
 
   return (
     <main className="admin-reviews-page">
@@ -322,12 +359,12 @@ function AdminReviews() {
         aria-label="Admin navigation"
       >
         <NavLink
-          to="/admin/menu"
+          to="/admin/monthly-records"
           className="admin-reviews-brand"
           onClick={() => setMobileNavigationOpen(false)}
         >
           <span className="admin-reviews-brand-mark" aria-hidden="true">
-            🌵
+            C
           </span>
           <span>
             <strong>Cactus Café</strong>
@@ -337,91 +374,10 @@ function AdminReviews() {
 
         <div className="admin-reviews-sidebar-label">WORKSPACE</div>
         <nav className="admin-reviews-nav">
-          <NavLink
-            to="/admin/menu"
-            className={({ isActive }) =>
-              `admin-reviews-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-reviews-nav-icon" aria-hidden="true">
-              ▦
-            </span>
-            <span>Menu Management</span>
-          </NavLink>
-          <NavLink
-            to="/admin/orders"
-            className={({ isActive }) =>
-              `admin-reviews-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-reviews-nav-icon" aria-hidden="true">
-              ↗
-            </span>
-            <span>Orders</span>
-          </NavLink>
-          <NavLink
-            to="/admin/payments"
-            className={({ isActive }) =>
-              `admin-reviews-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-reviews-nav-icon" aria-hidden="true">
-              ₱
-            </span>
-            <span>Payment Management</span>
-          </NavLink>
-          <NavLink
-            to="/admin/reservations"
-            className={({ isActive }) =>
-              `admin-reviews-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-reviews-nav-icon" aria-hidden="true">
-              ◷
-            </span>
-            <span>Reservations</span>
-          </NavLink>
-          <NavLink
-            to="/admin/reviews"
-            end
-            className={({ isActive }) =>
-              `admin-reviews-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-reviews-nav-icon" aria-hidden="true">
-              ☆
-            </span>
-            <span>Reviews</span>
-          </NavLink>
-          <NavLink
-            to="/admin/users"
-            className={({ isActive }) =>
-              `admin-reviews-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-reviews-nav-icon" aria-hidden="true">
-              ◎
-            </span>
-            <span>Customers &amp; Security</span>
-          </NavLink>
-          <NavLink
-            to="/admin/monthly-records"
-            className={({ isActive }) =>
-              `admin-reviews-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-reviews-nav-icon" aria-hidden="true">
-              ▤
-            </span>
-            <span>Monthly Records</span>
-          </NavLink>
+          <AdminWorkspaceNavigation
+            classPrefix="admin-reviews"
+            onNavigate={() => setMobileNavigationOpen(false)}
+          />
         </nav>
 
         <div className="admin-reviews-sidebar-footer">
@@ -511,6 +467,10 @@ function AdminReviews() {
             </div>
           </header>
 
+          {loading ? (
+            <AdminLoadingSkeleton label="Loading reviews" stats={4} rows={5} />
+          ) : (
+            <>
           <section className="reviews-overview">
             <div className="overview-stat">
               <span className="overview-stat-icon total-reviews-icon">
@@ -717,12 +677,31 @@ function AdminReviews() {
                         <span className="review-label">REVIEW ID</span>
                         <strong>#{review.id.slice(0, 8).toUpperCase()}</strong>
                       </span>
+                      {currentStatus === "Hidden" ? (
+                        <span>
+                          <span className="review-label">PUBLICATION</span>
+                          <strong>Hidden from public</strong>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="admin-review-hide-button"
+                          disabled={moderatingIds.has(review.id)}
+                          onClick={() => handleHideReview(review)}
+                        >
+                          {moderatingIds.has(review.id)
+                            ? "Hiding…"
+                            : "Hide review"}
+                        </button>
+                      )}
                     </div>
 
                   </article>
                 );
               })}
             </section>
+          )}
+            </>
           )}
         </div>
       </div>

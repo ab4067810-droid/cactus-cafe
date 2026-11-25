@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
   getDocs,
@@ -8,7 +8,10 @@ import {
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { NavLink, useNavigate } from "react-router-dom";
 
+import AdminWorkspaceNavigation from "../components/AdminWorkspaceNavigation";
+import AdminLoadingSkeleton from "../components/AdminLoadingSkeleton";
 import { auth, db } from "../services/firebase";
+import { getEffectiveRole } from "../utils/userRole";
 import { listBlockedPhones } from "../services/blockedPhoneService";
 import { updateStatusWithNotification } from "../services/notificationService";
 import PhoneBlockControl from "../components/PhoneBlockControl";
@@ -45,6 +48,20 @@ const formatPaymentStatus = (status) =>
   String(status || "pending")
     .replace(/_/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+const formatReservationDateForNotification = (reservation) => {
+  const dateValue = reservation?.reservationDate || reservation?.date;
+  if (typeof dateValue !== "string") return "your scheduled date";
+
+  const date = new Date(`${dateValue}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return "your scheduled date";
+
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+};
 
 const getStatusClass = (status) =>
   String(status || "Pending")
@@ -93,7 +110,9 @@ const ReservationStatIcon = ({ name }) => {
 function AdminReservations() {
   const navigate = useNavigate();
 
+  const receiptDialogRef = useRef(null);
   const [reservations, setReservations] = useState([]);
+  const [receiptPreview, setReceiptPreview] = useState(null);
   const [loading, setLoading] = useState(true);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -107,6 +126,17 @@ function AdminReservations() {
 
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
+
+  useEffect(() => {
+    const dialog = receiptDialogRef.current;
+    if (!dialog) return;
+
+    if (receiptPreview && !dialog.open) {
+      dialog.showModal();
+    } else if (!receiptPreview && dialog.open) {
+      dialog.close();
+    }
+  }, [receiptPreview]);
 
   const loadReservations = useCallback(async () => {
     try {
@@ -204,12 +234,17 @@ function AdminReservations() {
 
           const userData = userSnapshot.data();
 
-          if (userData.role !== "admin") {
+          const userRole = getEffectiveRole(userData);
+
+          if (userRole !== "admin" && userRole !== "staff") {
             alert(
               "Access denied. Administrator account required."
             );
 
-            navigate("/customer", { replace: true });
+            navigate(
+              userRole === "customer" ? "/menu" : "/login",
+              { replace: true },
+            );
             return;
           }
 
@@ -349,6 +384,10 @@ function AdminReservations() {
       setUpdatingId(reservationId);
       setNotice("");
 
+      const reservation = reservations.find(
+        (item) => item.id === reservationId,
+      );
+      const isApproval = newStatus === "Confirmed";
       const result = await updateStatusWithNotification({
         database: db,
         collectionName: "reservations",
@@ -356,8 +395,14 @@ function AdminReservations() {
         userIdField: "userId",
         type: "reservation",
         newStatus,
-        title: "Reservation status updated",
-        message: (status) => `Your reservation status is now ${status}.`,
+        title: isApproval
+          ? "Table reservation approved"
+          : "Reservation status updated",
+        message: (status) => isApproval
+          ? `Your table reservation on ${formatReservationDateForNotification(
+            reservation,
+          )} is approved. We look forward to welcoming you at Cactus Café.`
+          : `Your reservation status is now ${status}.`,
       });
 
       if (!result.changed) {
@@ -413,21 +458,6 @@ function AdminReservations() {
     }
   };
 
-  if (loading) {
-    return (
-      <main className="admin-reservations-page">
-        <section className="admin-reservations-loading">
-          <div className="loading-icon">◷</div>
-          <p className="admin-reservations-eyebrow">
-            CACTUS CAFE
-          </p>
-          <h1>Loading reservation workspace</h1>
-          <div className="loading-bar" />
-        </section>
-      </main>
-    );
-  }
-
   return (
     <main className="admin-reservations-page">
       {mobileNavigationOpen && (
@@ -451,101 +481,20 @@ function AdminReservations() {
           onClick={() => setMobileNavigationOpen(false)}
         >
           <span className="admin-reservations-brand-mark" aria-hidden="true">
-            🌵
+            C
           </span>
           <span>
             <strong>Cactus Café</strong>
-            <small>ADMIN WORKSPACE</small>
+            <small>STAFF WORKSPACE</small>
           </span>
         </NavLink>
 
         <div className="admin-reservations-sidebar-label">WORKSPACE</div>
         <nav className="admin-reservations-nav">
-          <NavLink
-            to="/admin/menu"
-            className={({ isActive }) =>
-              `admin-reservations-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-reservations-nav-icon" aria-hidden="true">
-              ▦
-            </span>
-            <span>Menu Management</span>
-          </NavLink>
-          <NavLink
-            to="/admin/orders"
-            className={({ isActive }) =>
-              `admin-reservations-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-reservations-nav-icon" aria-hidden="true">
-              ↗
-            </span>
-            <span>Orders</span>
-          </NavLink>
-          <NavLink
-            to="/admin/payments"
-            className={({ isActive }) =>
-              `admin-reservations-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-reservations-nav-icon" aria-hidden="true">
-              ₱
-            </span>
-            <span>Payment Management</span>
-          </NavLink>
-          <NavLink
-            to="/admin/reservations"
-            end
-            className={({ isActive }) =>
-              `admin-reservations-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-reservations-nav-icon" aria-hidden="true">
-              ◷
-            </span>
-            <span>Reservations</span>
-          </NavLink>
-          <NavLink
-            to="/admin/reviews"
-            className={({ isActive }) =>
-              `admin-reservations-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-reservations-nav-icon" aria-hidden="true">
-              ☆
-            </span>
-            <span>Reviews</span>
-          </NavLink>
-          <NavLink
-            to="/admin/users"
-            className={({ isActive }) =>
-              `admin-reservations-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-reservations-nav-icon" aria-hidden="true">
-              ◎
-            </span>
-            <span>Customers &amp; Security</span>
-          </NavLink>
-          <NavLink
-            to="/admin/monthly-records"
-            className={({ isActive }) =>
-              `admin-reservations-nav-link${isActive ? " active" : ""}`
-            }
-            onClick={() => setMobileNavigationOpen(false)}
-          >
-            <span className="admin-reservations-nav-icon" aria-hidden="true">
-              ▤
-            </span>
-            <span>Monthly Records</span>
-          </NavLink>
+          <AdminWorkspaceNavigation
+            classPrefix="admin-reservations"
+            onNavigate={() => setMobileNavigationOpen(false)}
+          />
         </nav>
 
         <div className="admin-reservations-sidebar-footer">
@@ -635,6 +584,10 @@ function AdminReservations() {
             </div>
           </header>
 
+          {loading ? (
+            <AdminLoadingSkeleton label="Loading reservations" stats={4} rows={5} />
+          ) : (
+            <>
           <section className="reservations-overview">
             <div className="overview-stat">
               <span
@@ -706,7 +659,7 @@ function AdminReservations() {
                 onClick={loadBlockedPhones}
                 disabled={blockedPhonesLoading}
               >
-                {blockedPhonesLoading ? "Checking..." : "Try again"}
+                Try again
               </button>
             </div>
           )}
@@ -962,6 +915,46 @@ function AdminReservations() {
                             <strong>{reservation.paymentReference}</strong>
                           </div>
                         )}
+                        <div className="admin-reservation-payment-proof">
+                          <span>RECEIPT SCREENSHOT</span>
+                          {reservation.paymentProofUrl ? (
+                            <>
+                              <div className="admin-reservation-receipt-actions">
+                                <button
+                                  type="button"
+                                  className="admin-reservation-receipt-thumbnail"
+                                  onClick={() => setReceiptPreview({
+                                    url: reservation.paymentProofUrl,
+                                    label: `Reservation #${reservation.id
+                                      .slice(0, 8)
+                                      .toUpperCase()} receipt`,
+                                  })}
+                                  aria-label="Enlarge reservation payment receipt"
+                                >
+                                  <img
+                                    src={reservation.paymentProofUrl}
+                                    alt=""
+                                  />
+                                  <span>Enlarge receipt</span>
+                                </button>
+                                <a
+                                  href={reservation.paymentProofUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="admin-reservation-receipt-original"
+                                >
+                                  Open original
+                                </a>
+                              </div>
+                              <p>
+                                Confirm the payment reference and exact amount
+                                submitted before confirming this reservation.
+                              </p>
+                            </>
+                          ) : (
+                            <strong>No payment screenshot provided.</strong>
+                          )}
+                        </div>
                       </div>
                     )}
 
@@ -1018,8 +1011,39 @@ function AdminReservations() {
               })}
             </section>
           )}
+            </>
+          )}
         </div>
       </div>
+      <dialog
+        ref={receiptDialogRef}
+        className="admin-reservation-receipt-dialog"
+        aria-label="Reservation payment receipt"
+        onClose={() => setReceiptPreview(null)}
+      >
+        {receiptPreview && (
+          <div className="admin-reservation-receipt-dialog-content">
+            <header>
+              <h2>{receiptPreview.label}</h2>
+              <button
+                type="button"
+                onClick={() => receiptDialogRef.current?.close()}
+                aria-label="Close receipt preview"
+              >
+                ×
+              </button>
+            </header>
+            <img src={receiptPreview.url} alt={receiptPreview.label} />
+            <a
+              href={receiptPreview.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open original
+            </a>
+          </div>
+        )}
+      </dialog>
     </main>
   );
 }

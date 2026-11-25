@@ -130,9 +130,32 @@ function Favorites() {
   if (authLoading || (isAuthenticated && loadedUserId !== userId)) {
     return (
       <main className="favorites-page">
-        <section className="favorites-loading" role="status" aria-busy="true">
-          Loading your favorites...
-        </section>
+        <div className="favorites-shell">
+          <header className="favorites-header">
+            <p className="favorites-eyebrow">YOUR CACTUS CAFÉ PICKS</p>
+            <h1>Favorites</h1>
+            <p>Keep the treats you love close, and add them to your cart anytime.</p>
+          </header>
+          <section
+            className="favorites-grid favorites-skeleton-grid"
+            role="status"
+            aria-label="Loading favorites"
+            aria-busy="true"
+          >
+            {[1, 2, 3].map((item) => (
+              <article className="favorite-skeleton-card" key={item} aria-hidden="true">
+                <span className="favorite-skeleton-image" />
+                <span className="favorite-skeleton-content">
+                  <span className="favorite-skeleton-line favorite-skeleton-category" />
+                  <span className="favorite-skeleton-line favorite-skeleton-title" />
+                  <span className="favorite-skeleton-line" />
+                  <span className="favorite-skeleton-line favorite-skeleton-description" />
+                  <span className="favorite-skeleton-line favorite-skeleton-footer" />
+                </span>
+              </article>
+            ))}
+          </section>
+        </div>
       </main>
     );
   }

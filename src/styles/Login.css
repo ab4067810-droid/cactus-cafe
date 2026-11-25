@@ -83,7 +83,7 @@
   width: min(100%, 390px);
   position: relative;
 
-  padding: 36px 34px 30px;
+  padding: 30px 34px 24px;
 
   border: 5px solid rgba(255, 255, 255, 0.92);
   border-radius: 30px;
@@ -141,7 +141,7 @@
 ========================================= */
 
 .login-header {
-  margin-bottom: 25px;
+  margin-bottom: 20px;
   padding-right: 24px;
 }
 
@@ -181,13 +181,13 @@
 .login-form {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 13px;
 }
 
 .form-group {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 6px;
 }
 
 .form-label {
@@ -480,8 +480,8 @@
 ========================================= */
 
 .login-footer {
-  margin-top: 23px;
-  padding-top: 18px;
+  margin-top: 16px;
+  padding-top: 13px;
   border-top: 1px solid #e3e8e2;
 }
 
@@ -512,7 +512,7 @@
 }
 
 .login-footer .login-register-prompt {
-  margin-top: 13px;
+  margin-top: 8px;
   color: #68716b;
   font-size: 0.76rem;
 }
@@ -656,8 +656,8 @@
     grid-column: 2;
     justify-self: center;
     width: min(calc(100% - 48px), 430px);
-    margin: 24px;
-    padding: 42px 38px 36px;
+    margin: 18px;
+    padding: 30px 38px 24px;
     border: 0;
     border-radius: 0;
     background: #fff;
@@ -687,8 +687,36 @@
 
   .login-card {
     width: min(calc(100% - 40px), 430px);
-    margin: 20px;
-    padding: 38px 34px 32px;
+    margin: 16px;
+    padding: 28px 34px 22px;
+  }
+}
+
+@media (min-width: 768px) and (max-height: 820px) {
+  .login-page {
+    padding-block: 16px;
+  }
+
+  .login-card {
+    padding-top: 24px;
+    padding-bottom: 20px;
+  }
+
+  .login-header {
+    margin-bottom: 17px;
+  }
+
+  .login-form {
+    gap: 12px;
+  }
+
+  .login-footer {
+    margin-top: 13px;
+    padding-top: 10px;
+  }
+
+  .login-footer .login-register-prompt {
+    margin-top: 6px;
   }
 }
 

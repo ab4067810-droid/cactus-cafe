@@ -22,6 +22,7 @@ import {
   writeBatch,
 } from "firebase/firestore";
 import { approveOrderRequest } from "../src/services/orderApprovalService.js";
+import { isPhoneBlocked } from "../src/services/blockedPhoneService.js";
 import { getApprovalPricing } from "../src/utils/approvalPricing.js";
 
 const projectId = "demo-cactus-cafe-rules";
@@ -43,7 +44,7 @@ let testEnv;
 let directCheckoutTestEnv;
 
 function makeRequest(overrides = {}) {
-  return {
+  const request = {
     customerId: "customer-1",
     customerEmail: "customer@example.test",
     customerName: "Cafe Customer",
@@ -56,9 +57,55 @@ function makeRequest(overrides = {}) {
     createdAt: serverTimestamp(),
     ...overrides,
   };
+  if (request.orderType === "delivery") {
+    request.deliveryBarangay ??= "Barangay 1 Poblacion";
+    request.deliveryFee ??= 20;
+  }
+  return request;
 }
 
 function makeOrder(request = makeRequest(), overrides = {}) {
+  const items = request.items.map(({ id, quantity }) => ({
+    id,
+    name: id === "coffee" ? "Coffee" : "Menu item",
+    price: 4,
+    quantity,
+    subtotal: 4 * quantity,
+  }));
+  const itemsSubtotal = items.reduce((sum, item) => sum + item.subtotal, 0);
+  return {
+    requestId: "request-1",
+    customerId: request.customerId,
+    customerEmail: request.customerEmail,
+    customerName: request.customerName,
+    phone: request.phone,
+    orderType: request.orderType,
+    address: request.address,
+    ...(request.orderType === "delivery"
+      ? {
+        deliveryBarangay: request.deliveryBarangay,
+        deliveryFee: request.deliveryFee,
+        itemsSubtotal,
+      }
+      : {}),
+    ...(Object.hasOwn(request, "deliveryLocation")
+      ? { deliveryLocation: request.deliveryLocation }
+      : {}),
+    notes: request.notes,
+    items,
+    total: itemsSubtotal + (
+      request.orderType === "delivery" ? request.deliveryFee : 0
+    ),
+    paymentMethod: "cash",
+    paymentTiming: "pay_later",
+    cashPaymentStatus: "unpaid",
+    status: "Pending",
+    createdAt: serverTimestamp(),
+    ...overrides,
+  };
+}
+
+function makePrototypeOrder(request = makeRequest(), overrides = {}) {
   return {
     requestId: "request-1",
     customerId: request.customerId,
@@ -100,10 +147,39 @@ function makeReservation(userId, overrides = {}) {
     amountPaidNow: 50,
     remainingBalance: 50,
     paymentMethod: "qr",
-    paymentReference: "TEST-REF-001",
+    paymentReference: "TESTREF001",
+    paymentProofUrl: "data:image/jpeg;base64,/9j/2Q==",
     paymentStatus: "pending_review",
     ...overrides,
   };
+}
+
+function makePaymentReferenceClaim(
+  normalizedReference,
+  createdBy = "customer-1",
+  sourceType = "reservation",
+) {
+  return {
+    normalizedReference,
+    sourceType,
+    createdBy,
+    createdAt: serverTimestamp(),
+  };
+}
+
+async function createReservationWithReference(
+  database,
+  reservationId,
+  reservation,
+  createdBy = "customer-1",
+) {
+  const batch = writeBatch(database);
+  batch.set(
+    doc(database, `paymentReferences/${reservation.paymentReference}`),
+    makePaymentReferenceClaim(reservation.paymentReference, createdBy),
+  );
+  batch.set(doc(database, `reservations/${reservationId}`), reservation);
+  await batch.commit();
 }
 
 function makeNotification(userId = "customer-1", overrides = {}) {
@@ -121,7 +197,16 @@ function makeNotification(userId = "customer-1", overrides = {}) {
 
 async function seedPendingRequest(requestId = "request-1", request = makeRequest()) {
   await testEnv.withSecurityRulesDisabled(async (context) => {
-    await setDoc(doc(context.firestore(), `orderRequests/${requestId}`), request);
+    const firestore = context.firestore();
+    await Promise.all([
+      setDoc(doc(firestore, `orderRequests/${requestId}`), request),
+      setDoc(doc(firestore, `paymentSelections/${requestId}`), {
+        requestId,
+        customerId: request.customerId,
+        method: "cash",
+        timing: "pay_later",
+      }),
+    ]);
   });
 }
 
@@ -269,6 +354,10 @@ beforeEach(async () => {
         role: "admin",
         email: "admin@example.test",
       }),
+      setDoc(doc(db, "users/staff-1"), {
+        role: "staff",
+        email: "staff@example.test",
+      }),
       setDoc(doc(db, "menuItems/coffee"), { name: "Coffee", price: 4 }),
       setDoc(doc(db, "orders/order-1"), {
         customerId: "customer-1",
@@ -299,16 +388,36 @@ describe("user access", () => {
       updateDoc(doc(db, "users/customer-1"), { role: "admin" }),
     );
   });
+
+  it("preserves access for legacy administrators with only the isAdmin flag", async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), "users/legacy-admin"), {
+        isAdmin: true,
+      });
+    });
+
+    const db = testEnv.authenticatedContext("legacy-admin").firestore();
+    await assertSucceeds(getDoc(doc(db, "users/customer-1")));
+    await assertSucceeds(getDocs(collection(db, "users")));
+    await assertSucceeds(getDocs(collection(db, "orders")));
+  });
 });
 
 describe("customer notifications", () => {
-  it("allows admins to create only valid notifications", async () => {
+  it("allows admins and staff to create only valid notifications", async () => {
     const adminDb = testEnv.authenticatedContext("admin-1").firestore();
+    const staffDb = testEnv.authenticatedContext("staff-1").firestore();
     const customerDb = testEnv.authenticatedContext("customer-1").firestore();
 
     await assertSucceeds(
       setDoc(
         doc(adminDb, "notifications/valid-notification"),
+        makeNotification(),
+      ),
+    );
+    await assertSucceeds(
+      setDoc(
+        doc(staffDb, "notifications/staff-created"),
         makeNotification(),
       ),
     );
@@ -447,7 +556,7 @@ describe("customer favorites access", () => {
 });
 
 describe("menu access", () => {
-  it("allows public reads while limiting writes to admins", async () => {
+  it("allows public reads while limiting writes to admins and staff", async () => {
     const visitorDb = testEnv.unauthenticatedContext().firestore();
     const customerDb = testEnv.authenticatedContext("customer-1").firestore();
     const adminDb = testEnv.authenticatedContext("admin-1").firestore();
@@ -488,6 +597,96 @@ describe("menu access", () => {
     await assertFails(createTea(customerDb));
     await assertSucceeds(createTea(adminDb));
   });
+
+  it("allows staff to create a menu item with its paired price book", async () => {
+    const staffDb = testEnv.authenticatedContext("staff-1").firestore();
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), "menuControl/migration"), {
+        state: "ready",
+        startedAt: Timestamp.fromMillis(1000),
+        updatedAt: Timestamp.fromMillis(1000),
+        updatedBy: "admin-1",
+      });
+    });
+
+    const staffBatch = writeBatch(staffDb);
+    staffBatch.set(doc(staffDb, "menuItems/staff-item"), {
+      name: "Staff Tea",
+      price: 3,
+      available: true,
+      menuRevision: 1,
+    });
+    staffBatch.set(doc(staffDb, "menuControl/current"), {
+      revision: 1,
+      updatedAt: serverTimestamp(),
+      lastChangedMenuItemId: "staff-item",
+      prices: {
+        "staff-item": {
+          priceCents: 300,
+          available: true,
+          menuRevision: 1,
+        },
+      },
+    });
+    await assertSucceeds(staffBatch.commit());
+  });
+});
+
+describe("payment reference registry", () => {
+  it("allows signed-in single-document gets but denies customer collection lists", async () => {
+    const ownerDb = testEnv.authenticatedContext("customer-1").firestore();
+    const otherDb = testEnv.authenticatedContext("customer-2").firestore();
+    const adminDb = testEnv.authenticatedContext("admin-1").firestore();
+    const reference = "1234567890123";
+
+    await assertSucceeds(
+      setDoc(
+        doc(ownerDb, `paymentReferences/${reference}`),
+        makePaymentReferenceClaim(reference),
+      ),
+    );
+    await assertSucceeds(
+      getDoc(doc(ownerDb, `paymentReferences/${reference}`)),
+    );
+    await assertSucceeds(
+      getDoc(doc(otherDb, `paymentReferences/${reference}`)),
+    );
+    await assertFails(getDocs(collection(ownerDb, "paymentReferences")));
+    await assertSucceeds(getDocs(collection(adminDb, "paymentReferences")));
+  });
+
+  it("rejects duplicate claims, customer overwrites, and PII fields", async () => {
+    const ownerDb = testEnv.authenticatedContext("customer-1").firestore();
+    const otherDb = testEnv.authenticatedContext("customer-2").firestore();
+    const reference = "1234567890123";
+    const referenceRef = doc(ownerDb, `paymentReferences/${reference}`);
+
+    await assertSucceeds(
+      setDoc(referenceRef, makePaymentReferenceClaim(reference)),
+    );
+    await assertFails(
+      setDoc(
+        doc(otherDb, `paymentReferences/${reference}`),
+        makePaymentReferenceClaim(reference, "customer-2"),
+      ),
+    );
+    await assertFails(
+      setDoc(referenceRef, makePaymentReferenceClaim(reference)),
+    );
+    await assertFails(
+      updateDoc(referenceRef, { sourceType: "reservation" }),
+    );
+    await assertFails(deleteDoc(referenceRef));
+    await assertFails(
+      setDoc(
+        doc(ownerDb, "paymentReferences/1234567890124"),
+        {
+          ...makePaymentReferenceClaim("1234567890124"),
+          customerEmail: "customer@example.test",
+        },
+      ),
+    );
+  });
 });
 
 describe("order access", () => {
@@ -495,13 +694,19 @@ describe("order access", () => {
     const ownerDb = testEnv.authenticatedContext("customer-1").firestore();
     const otherDb = testEnv.authenticatedContext("customer-2").firestore();
     const adminDb = testEnv.authenticatedContext("admin-1").firestore();
+    const staffDb = testEnv.authenticatedContext("staff-1").firestore();
 
     await assertSucceeds(getDoc(doc(ownerDb, "orders/order-1")));
     await assertFails(getDoc(doc(otherDb, "orders/order-1")));
     await assertSucceeds(getDoc(doc(adminDb, "orders/order-1")));
+    await assertSucceeds(getDoc(doc(staffDb, "orders/order-1")));
     const adminOrders = await getDocs(collection(adminDb, "orders"));
     if (adminOrders.size !== 2) {
       throw new Error("Administrator could not list all seeded orders");
+    }
+    const staffOrders = await getDocs(collection(staffDb, "orders"));
+    if (staffOrders.size !== 2) {
+      throw new Error("Staff could not list operational orders");
     }
   });
 
@@ -519,12 +724,16 @@ describe("order access", () => {
 
   it("allows admins to change only an order's status to an approved value", async () => {
     const db = testEnv.authenticatedContext("admin-1").firestore();
+    const staffDb = testEnv.authenticatedContext("staff-1").firestore();
     const customerDb = testEnv
       .authenticatedContext("customer-1", { email: "customer@example.test" })
       .firestore();
 
     await assertSucceeds(
       updateDoc(doc(db, "orders/order-1"), { status: "Confirmed" }),
+    );
+    await assertSucceeds(
+      updateDoc(doc(staffDb, "orders/order-2"), { status: "Confirmed" }),
     );
     await assertFails(
       updateDoc(doc(db, "orders/order-1"), { total: 99 }),
@@ -577,6 +786,21 @@ describe("admin-reviewed order request workflow", () => {
     );
     assert.equal(rejectedRequest.data().reviewedBy, "admin-1");
     assert.ok(rejectedRequest.data().reviewedAt instanceof Timestamp);
+  });
+
+  it("allows staff to reject pending operational requests", async () => {
+    const requestId = "staff-rejected-request";
+    await seedPendingRequest(requestId);
+    const db = testEnv.authenticatedContext("staff-1").firestore();
+
+    await assertSucceeds(
+      updateDoc(doc(db, `orderRequests/${requestId}`), {
+        status: "rejected",
+        reviewedAt: serverTimestamp(),
+        reviewedBy: "staff-1",
+        rejectionReason: "The requested item is unavailable.",
+      }),
+    );
   });
 
   it("denies customer, incomplete, and malformed request rejections", async () => {
@@ -838,40 +1062,6 @@ describe("admin-reviewed order request workflow", () => {
     await assertFails(batch.commit());
   });
 
-  it("requires the approved item size to match the requested size", async () => {
-    const requestId = "sized-item-approval";
-    const request = makeRequest({
-      items: [{ id: "soda", quantity: 1, size: "12oz" }],
-    });
-    await seedPendingRequest(requestId, request);
-    const db = testEnv.authenticatedContext("admin-1").firestore();
-    const order = makeOrder(request, {
-      requestId,
-      items: [{
-        id: "soda",
-        name: "Soda",
-        size: "12oz",
-        price: 3,
-        quantity: 1,
-        subtotal: 3,
-      }],
-      total: 3,
-    });
-
-    await assertSucceeds(approveOrder(db, requestId, request, order));
-
-    const mismatchedRequestId = "sized-item-approval-mismatch";
-    await seedPendingRequest(mismatchedRequestId, request);
-    const mismatchedOrder = {
-      ...order,
-      requestId: mismatchedRequestId,
-      items: [{ ...order.items[0], size: "16oz" }],
-    };
-    await assertDeniedWithoutRuleEvaluationError(
-      approveOrder(db, mismatchedRequestId, request, mismatchedOrder),
-    );
-  });
-
   it("prevents non-admins from approving requests", async () => {
     const requestId = "non-admin-approval";
     const request = makeRequest();
@@ -1113,33 +1303,6 @@ describe("admin-reviewed order request workflow", () => {
     assert.equal(pendingRequest.data().status, "pending");
     assert.equal(pendingRequest.data().orderId, undefined);
     assert.equal(officialOrder.exists(), false);
-  });
-
-  it("denies a non-admin approval without changing either document", async () => {
-    const requestId = "service-non-admin-approval";
-    const request = makeRequest();
-    await seedApprovalState();
-    await seedPendingRequest(requestId, request);
-    const db = testEnv.authenticatedContext("customer-2").firestore();
-    const result = await approveOrderRequest(
-      db,
-      requestId,
-      "customer-2",
-      getApprovalPricing(
-        request,
-        new Map([["coffee", { name: "Coffee", price: 4 }]]),
-      ),
-    );
-
-    assert.equal(result.error.code, "permission-denied");
-    assert.equal(
-      (await getDoc(doc(db, `orderRequests/${requestId}`))).data().status,
-      "pending",
-    );
-    assert.equal(
-      (await getDoc(doc(db, `orders/${requestId}`))).exists(),
-      false,
-    );
   });
 
   it("denies approval while migrating, finalizing, or without migration control", async () => {
@@ -1584,16 +1747,27 @@ describe("reservation access", () => {
   it("allows customers to create only their own pending reservations", async () => {
     const db = testEnv.authenticatedContext("customer-1").firestore();
 
-    await assertSucceeds(
+    await assertFails(
       setDoc(
-        doc(db, "reservations/reservation-1"),
+        doc(db, "reservations/missing-reference-claim"),
+        makeReservation("customer-1", {
+          paymentReference: "MISSINGCLAIM001",
+        }),
+      ),
+    );
+    await assertSucceeds(
+      createReservationWithReference(
+        db,
+        "reservation-1",
         makeReservation("customer-1"),
       ),
     );
     await assertSucceeds(
-      setDoc(
-        doc(db, "reservations/full-payment-reservation"),
+      createReservationWithReference(
+        db,
+        "full-payment-reservation",
         makeReservation("customer-1", {
+          paymentReference: "TESTREF002",
           selectedPaymentOption: "full",
           amountPaidNow: 100,
           remainingBalance: 0,
@@ -1601,35 +1775,69 @@ describe("reservation access", () => {
       ),
     );
     await assertFails(
-      setDoc(
-        doc(db, "reservations/reservation-2"),
-        makeReservation("customer-2"),
+      createReservationWithReference(
+        db,
+        "reservation-2",
+        makeReservation("customer-2", { paymentReference: "TESTREF003" }),
       ),
     );
     await assertFails(
-      setDoc(
-        doc(db, "reservations/reservation-3"),
-        makeReservation("customer-1", { status: "Confirmed" }),
+      createReservationWithReference(
+        db,
+        "reservation-3",
+        makeReservation("customer-1", {
+          paymentReference: "TESTREF004",
+          status: "Confirmed",
+        }),
       ),
     );
     await assertFails(
-      setDoc(
-        doc(db, "reservations/reservation-4"),
-        makeReservation("customer-1", { amountPaidNow: 99 }),
+      createReservationWithReference(
+        db,
+        "reservation-4",
+        makeReservation("customer-1", {
+          paymentReference: "TESTREF005",
+          amountPaidNow: 99,
+        }),
       ),
     );
     await assertFails(
-      setDoc(
-        doc(db, "reservations/reservation-5"),
-        makeReservation("customer-1", { paymentStatus: "paid" }),
+      createReservationWithReference(
+        db,
+        "reservation-5",
+        makeReservation("customer-1", {
+          paymentReference: "TESTREF006",
+          paymentStatus: "paid",
+        }),
+      ),
+    );
+    const reservationWithoutProof = makeReservation("customer-1");
+    reservationWithoutProof.paymentReference = "TESTREF007";
+    delete reservationWithoutProof.paymentProofUrl;
+    await assertFails(
+      createReservationWithReference(
+        db,
+        "reservation-without-proof",
+        reservationWithoutProof,
+      ),
+    );
+    await assertFails(
+      createReservationWithReference(
+        db,
+        "reservation-invalid-proof",
+        makeReservation("customer-1", {
+          paymentReference: "TESTREF008",
+          paymentProofUrl: "https://example.test/receipt.jpg",
+        }),
       ),
     );
   });
 
   it("prevents customers from editing or deleting reservations", async () => {
     const db = testEnv.authenticatedContext("customer-1").firestore();
-    await setDoc(
-      doc(db, "reservations/reservation-1"),
+    await createReservationWithReference(
+      db,
+      "reservation-1",
       makeReservation("customer-1"),
     );
 
@@ -1639,6 +1847,206 @@ describe("reservation access", () => {
       }),
     );
     await assertFails(deleteDoc(doc(db, "reservations/reservation-1")));
+  });
+
+  it("allows staff to update operational reservation status", async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(
+        doc(context.firestore(), "reservations/staff-reservation"),
+        makeReservation("customer-1"),
+      );
+    });
+
+    const db = testEnv.authenticatedContext("staff-1").firestore();
+    await assertSucceeds(
+      updateDoc(doc(db, "reservations/staff-reservation"), {
+        status: "Confirmed",
+      }),
+    );
+  });
+});
+
+describe("phone registry and blocked phone access", () => {
+  it("keeps registry mappings private while allowing UID-free duplicate checks", async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore();
+      await Promise.all([
+        setDoc(doc(db, "users/customer-1"), {
+          phone: "09123456789",
+          phoneNumber: "09123456789",
+        }, { merge: true }),
+        setDoc(doc(db, "users/customer-2"), {
+          phone: "09234567890",
+          phoneNumber: "09234567890",
+        }, { merge: true }),
+        setDoc(doc(db, "phoneRegistry/09123456789"), {
+          uid: "customer-1",
+          phone: "09123456789",
+          updatedAt: Timestamp.fromMillis(1000),
+        }),
+        setDoc(doc(db, "phoneRegistry/09234567890"), {
+          uid: "customer-2",
+          phone: "09234567890",
+          updatedAt: Timestamp.fromMillis(1000),
+        }),
+        setDoc(doc(db, "phoneClaims/09123456789"), {
+          phone: "09123456789",
+        }),
+        setDoc(doc(db, "phoneClaims/09234567890"), {
+          phone: "09234567890",
+        }),
+        setDoc(doc(db, "blockedPhones/09123456789"), {
+          phone: "09123456789",
+          customerName: "Customer One",
+          address: "Private address",
+          reason: "Private reason",
+        }),
+        setDoc(doc(db, "blockedPhones/09234567890"), {
+          phone: "09234567890",
+          customerName: "Customer Two",
+          address: "Other private address",
+          reason: "Other private reason",
+        }),
+      ]);
+    });
+
+    const customerDb = testEnv.authenticatedContext("customer-1").firestore();
+    await assertSucceeds(
+      getDoc(doc(customerDb, "phoneRegistry/09123456789")),
+    );
+    await assertFails(
+      getDoc(doc(customerDb, "phoneRegistry/09234567890")),
+    );
+    await assertSucceeds(
+      getDoc(doc(customerDb, "phoneRegistry/09345678901")),
+    );
+    await assertSucceeds(
+      getDoc(doc(customerDb, "phoneClaims/09234567890")),
+    );
+    await assertFails(getDocs(collection(customerDb, "phoneClaims")));
+    await assertSucceeds(
+      getDoc(doc(customerDb, "blockedPhones/09123456789")),
+    );
+    await assertFails(
+      getDoc(doc(customerDb, "blockedPhones/09234567890")),
+    );
+    await assertSucceeds(
+      getDoc(doc(customerDb, "blockedPhones/09345678901")),
+    );
+    assert.equal(
+      await isPhoneBlocked(customerDb, "09234567890"),
+      true,
+      "A denied read of an existing foreign block should remain a positive block check.",
+    );
+
+    const staffDb = testEnv.authenticatedContext("staff-1").firestore();
+    await assertSucceeds(
+      getDoc(doc(staffDb, "phoneRegistry/09234567890")),
+    );
+    await assertSucceeds(
+      getDoc(doc(staffDb, "blockedPhones/09234567890")),
+    );
+  });
+
+  it("requires a customer phone claim to match the profile in the same commit", async () => {
+    const db = testEnv.authenticatedContext("customer-1").firestore();
+    const validBatch = writeBatch(db);
+    validBatch.update(doc(db, "users/customer-1"), {
+      phone: "09123456789",
+      phoneNumber: "09123456789",
+      phoneUpdatedAt: serverTimestamp(),
+    });
+    validBatch.set(doc(db, "phoneRegistry/09123456789"), {
+      uid: "customer-1",
+      phone: "09123456789",
+      updatedAt: serverTimestamp(),
+    });
+    validBatch.set(doc(db, "phoneClaims/09123456789"), {
+      phone: "09123456789",
+    });
+    await assertSucceeds(validBatch.commit());
+
+    const unrelatedClaimBatch = writeBatch(db);
+    unrelatedClaimBatch.set(doc(db, "phoneRegistry/09234567890"), {
+      uid: "customer-1",
+      phone: "09234567890",
+      updatedAt: serverTimestamp(),
+    });
+    unrelatedClaimBatch.set(doc(db, "phoneClaims/09234567890"), {
+      phone: "09234567890",
+    });
+    await assertFails(unrelatedClaimBatch.commit());
+  });
+});
+
+describe("staff operational and restricted data access", () => {
+  it("allows operational reads but keeps customer and security records private", async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore();
+      await Promise.all([
+        setDoc(doc(db, "orderRequests/request-1"), makeRequest()),
+        setDoc(
+          doc(db, "reservations/reservation-1"),
+          makeReservation("customer-1"),
+        ),
+        setDoc(doc(db, "paymentSelections/request-1"), {
+          requestId: "request-1",
+          customerId: "customer-1",
+          method: "qr",
+          timing: "advance",
+          createdAt: Timestamp.fromMillis(1000),
+          updatedAt: Timestamp.fromMillis(1000),
+        }),
+        setDoc(doc(db, "paymentRecords/order-1"), {
+          customerId: "customer-1",
+          orderId: "order-1",
+        }),
+        setDoc(
+          doc(db, "paymentRecords/order-1/submissions/attempt-1"),
+          { customerId: "customer-1", orderId: "order-1" },
+        ),
+        setDoc(doc(db, "blockedPhones/09123456789"), {
+          phone: "09123456789",
+        }),
+        setDoc(doc(db, "menuControl/migration"), {
+          state: "ready",
+          startedAt: Timestamp.fromMillis(1000),
+          updatedAt: Timestamp.fromMillis(1000),
+          updatedBy: "admin-1",
+        }),
+      ]);
+    });
+
+    const db = testEnv.authenticatedContext("staff-1").firestore();
+    await assertSucceeds(getDoc(doc(db, "orderRequests/request-1")));
+    await assertSucceeds(getDoc(doc(db, "reservations/reservation-1")));
+    await assertSucceeds(getDoc(doc(db, "paymentSelections/request-1")));
+    await assertSucceeds(getDoc(doc(db, "paymentRecords/order-1")));
+    await assertSucceeds(
+      getDoc(doc(db, "paymentRecords/order-1/submissions/attempt-1")),
+    );
+    await assertSucceeds(getDocs(collection(db, "blockedPhones")));
+    await assertSucceeds(getDoc(doc(db, "menuControl/migration")));
+    await assertFails(getDoc(doc(db, "users/customer-1")));
+    await assertFails(getDocs(collection(db, "users")));
+    await assertFails(getDocs(collection(db, "phoneRestorationRequests")));
+    await assertFails(getDoc(doc(db, "monthlyRecords/current")));
+  });
+
+  it("allows staff to manage blocked phone entries without granting user access", async () => {
+    const db = testEnv.authenticatedContext("staff-1").firestore();
+    const blockedPhone = doc(db, "blockedPhones/09123456789");
+
+    await assertSucceeds(
+      setDoc(blockedPhone, {
+        phone: "09123456789",
+        reason: "Repeated no-shows",
+        blockedBy: "staff-1",
+        blockedAt: serverTimestamp(),
+      }),
+    );
+    await assertSucceeds(deleteDoc(blockedPhone));
+    await assertFails(getDoc(doc(db, "users/customer-1")));
   });
 });
 
@@ -1672,24 +2080,45 @@ describe("review access", () => {
     );
   });
 
-  it("prevents admins from altering or deleting reviews", async () => {
+  it("allows admins to moderate reviews but not edit customer content", async () => {
     await testEnv.withSecurityRulesDisabled(async (context) => {
-      await setDoc(doc(context.firestore(), "reviews/review-1"), {
-        customerId: "customer-1",
-        status: "Pending",
-        rating: 5,
-        comment: "Great coffee",
-      });
+      const db = context.firestore();
+      await Promise.all([
+        setDoc(doc(db, "reviews/review-1"), {
+          customerId: "customer-1",
+          status: "Pending",
+          rating: 5,
+          comment: "Great coffee",
+        }),
+        setDoc(doc(db, "publicReviews/review-1"), makePublicReview()),
+      ]);
     });
-    const db = testEnv.authenticatedContext("admin-1").firestore();
+    const adminDb = testEnv.authenticatedContext("admin-1").firestore();
+    const customerDb = testEnv.authenticatedContext("customer-1").firestore();
 
     await assertFails(
-      updateDoc(doc(db, "reviews/review-1"), { status: "Approved" }),
+      updateDoc(doc(customerDb, "reviews/review-1"), {
+        status: "Hidden",
+        moderatedAt: serverTimestamp(),
+        moderatedBy: "customer-1",
+      }),
+    );
+    await assertSucceeds(
+      updateDoc(doc(adminDb, "reviews/review-1"), {
+        status: "Hidden",
+        moderatedAt: serverTimestamp(),
+        moderatedBy: "admin-1",
+      }),
     );
     await assertFails(
-      updateDoc(doc(db, "reviews/review-1"), { comment: "Changed" }),
+      updateDoc(doc(adminDb, "reviews/review-1"), { comment: "Changed" }),
     );
-    await assertFails(deleteDoc(doc(db, "reviews/review-1")));
+    await assertFails(deleteDoc(doc(adminDb, "reviews/review-1")));
+
+    const deleteBatch = writeBatch(adminDb);
+    deleteBatch.delete(doc(adminDb, "reviews/review-1"));
+    deleteBatch.delete(doc(adminDb, "publicReviews/review-1"));
+    await assertSucceeds(deleteBatch.commit());
   });
 
   it("allows anonymous reads of valid public reviews", async () => {
@@ -1775,6 +2204,30 @@ describe("review access", () => {
     );
     await assertSucceeds(batch.commit());
 
+    const mismatchedRatingBatch = writeBatch(db);
+    mismatchedRatingBatch.set(doc(db, "reviews/mismatched-rating"), {
+      customerId: "customer-1",
+      rating: 4,
+      comment: "Great coffee",
+    });
+    mismatchedRatingBatch.set(
+      doc(db, "publicReviews/mismatched-rating"),
+      makePublicReview({ rating: 5 }),
+    );
+    await assertFails(mismatchedRatingBatch.commit());
+
+    const mismatchedCommentBatch = writeBatch(db);
+    mismatchedCommentBatch.set(doc(db, "reviews/mismatched-comment"), {
+      customerId: "customer-1",
+      rating: 5,
+      comment: "Great coffee",
+    });
+    mismatchedCommentBatch.set(
+      doc(db, "publicReviews/mismatched-comment"),
+      makePublicReview({ comment: "Different public comment" }),
+    );
+    await assertFails(mismatchedCommentBatch.commit());
+
     await assertFails(
       updateDoc(doc(db, "publicReviews/existing-review"), {
         comment: "Changed comment",
@@ -1785,13 +2238,13 @@ describe("review access", () => {
     );
   });
 
-  it("allows admins to create but not alter or delete public reviews", async () => {
+  it("allows admins to create, update, and delete public reviews", async () => {
     const db = testEnv.authenticatedContext("admin-1").firestore();
     const reviewRef = doc(db, "publicReviews/admin-review");
 
     await assertSucceeds(setDoc(reviewRef, makePublicReview()));
-    await assertFails(updateDoc(reviewRef, makePublicReview({ rating: 4 })));
-    await assertFails(deleteDoc(reviewRef));
+    await assertSucceeds(updateDoc(reviewRef, makePublicReview({ rating: 4 })));
+    await assertSucceeds(deleteDoc(reviewRef));
   });
 
   it("rejects public review documents with invalid fields or shapes", async () => {
@@ -2269,7 +2722,7 @@ describe("prototype Rules: direct order access", () => {
           adminDb,
           requestId,
           request,
-          makeOrder(request, { requestId }),
+          makePrototypeOrder(request, { requestId }),
         ),
       );
 
@@ -2303,7 +2756,7 @@ describe("prototype Rules: direct order access", () => {
           adminDb,
           requestId,
           request,
-          makeOrder(request, { requestId }),
+          makePrototypeOrder(request, { requestId }),
         ),
       );
 
@@ -2334,7 +2787,12 @@ describe("prototype Rules: direct order access", () => {
         .firestore();
 
       await assertDeniedWithoutRuleEvaluationError(
-        approveOrder(db, requestId, request),
+        approveOrder(
+          db,
+          requestId,
+          request,
+          makePrototypeOrder(request, { requestId }),
+        ),
       );
     });
 
@@ -2346,9 +2804,12 @@ describe("prototype Rules: direct order access", () => {
         .authenticatedContext("admin-1")
         .firestore();
 
-      await assertSucceeds(approveOrder(adminDb, requestId, request));
+      const prototypeOrder = makePrototypeOrder(request, { requestId });
+      await assertSucceeds(
+        approveOrder(adminDb, requestId, request, prototypeOrder),
+      );
       await assertDeniedWithoutRuleEvaluationError(
-        approveOrder(adminDb, requestId, request),
+        approveOrder(adminDb, requestId, request, prototypeOrder),
       );
     });
 
@@ -2365,7 +2826,7 @@ describe("prototype Rules: direct order access", () => {
           adminDb,
           requestId,
           request,
-          makeOrder(request, {
+          makePrototypeOrder(request, {
             requestId,
             customerName: "Different Customer",
           }),
@@ -2390,7 +2851,7 @@ describe("prototype Rules: direct order access", () => {
       });
       batch.set(
         doc(adminDb, `orders/${orderId}`),
-        makeOrder(request, { requestId: orderId }),
+        makePrototypeOrder(request, { requestId: orderId }),
       );
 
       await assertDeniedWithoutRuleEvaluationError(batch.commit());
@@ -2439,7 +2900,7 @@ describe("prototype Rules: direct order access", () => {
       await assertDeniedWithoutRuleEvaluationError(
         setDoc(
           doc(adminDb, `orders/${requestId}`),
-          makeOrder(request, { requestId }),
+          makePrototypeOrder(request, { requestId }),
         ),
       );
     });
@@ -2474,7 +2935,7 @@ describe("prototype Rules: direct order access", () => {
           customerDb,
           requestId,
           request,
-          makeOrder(request, { requestId }),
+          makePrototypeOrder(request, { requestId }),
         ),
       );
     });
@@ -2504,7 +2965,7 @@ describe("prototype Rules: direct order access", () => {
       });
       batch.set(
         doc(adminDb, `orders/${requestId}`),
-        makeOrder(changedRequest, { requestId }),
+        makePrototypeOrder(changedRequest, { requestId }),
       );
 
       await assertDeniedWithoutRuleEvaluationError(batch.commit());

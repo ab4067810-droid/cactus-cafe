@@ -11,10 +11,65 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == userId;
     }
 
+    function userProfileIsAdmin(userData) {
+      let role = userData.get("role", null);
+      return (role is string && role.lower() == "admin")
+        || (
+          (!(role is string)
+            || (
+              role.lower() != "staff"
+              && role.lower() != "customer"
+            ))
+          && userData.get("isAdmin", false) == true
+        );
+    }
+
+    function userProfileIsAdminOrStaff(userData) {
+      return userProfileIsAdmin(userData)
+        || (
+          userData.get("role", null) is string
+          && userData.get("role", null).lower() == "staff"
+        );
+    }
+
+    function userProfileIsCustomer(userData) {
+      let role = userData.get("role", null);
+      return role is string && role.lower() == "customer";
+    }
+
     function isAdmin() {
       return signedIn()
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
+        && userProfileIsAdmin(
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data
+        );
+    }
+
+    function isStaff() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && (
+          get(/databases/$(database)/documents/users/$(request.auth.uid))
+            .data.get("role", null) is string
+        )
+        && get(/databases/$(database)/documents/users/$(request.auth.uid))
+          .data.get("role", null).lower() == "staff";
+    }
+
+    function isCustomer() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && userProfileIsCustomer(
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data
+        );
+    }
+
+    function isAdminOrStaff() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && userProfileIsAdminOrStaff(
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data
+        );
     }
 
     function validText(value, maxLength) {
@@ -25,6 +80,14 @@ service cloud.firestore {
 
     function phoneRegistryPath(phone) {
       return /databases/$(database)/documents/phoneRegistry/$(phone);
+    }
+
+    function phoneClaimPath(phone) {
+      return /databases/$(database)/documents/phoneClaims/$(phone);
+    }
+
+    function userProfilePath(userId) {
+      return /databases/$(database)/documents/users/$(userId);
     }
 
     function validPhoneForUser(phone, userId) {
@@ -48,6 +111,21 @@ service cloud.firestore {
         : phone is string && phone != ""
           ? phone
           : "";
+    }
+
+    function userProfileHasPhone(userId, phone) {
+      return exists(userProfilePath(userId))
+        && userPhone(get(userProfilePath(userId)).data) == phone;
+    }
+
+    function userProfileHasPhoneAfter(userId, phone) {
+      return existsAfter(userProfilePath(userId))
+        && userPhone(getAfter(userProfilePath(userId)).data) == phone;
+    }
+
+    function customerOwnsProfilePhone(phone) {
+      return isCustomer()
+        && userProfileHasPhone(request.auth.uid, phone);
     }
 
     function validOptionalUserPhone(data, userId) {
@@ -137,7 +215,7 @@ service cloud.firestore {
       let blockedPath = blockedPhonePath(phone);
       return exists(userPath)
         && exists(blockedPath)
-        && get(userPath).data.role == "customer"
+        && userProfileIsCustomer(get(userPath).data)
         && userPhone(get(userPath).data) == phone
         && (
           !get(blockedPath).data.keys().hasAny(["customerUid"])
@@ -354,15 +432,11 @@ service cloud.firestore {
       return itemCount >= 1
         && itemCount <= 10
         && validRequestItem(items[0])
-        && (itemCount <= 1 || validRequestItem(items[1]))
-        && (itemCount <= 2 || validRequestItem(items[2]))
-        && (itemCount <= 3 || validRequestItem(items[3]))
-        && (itemCount <= 4 || validRequestItem(items[4]))
-        && (itemCount <= 5 || validRequestItem(items[5]))
-        && (itemCount <= 6 || validRequestItem(items[6]))
-        && (itemCount <= 7 || validRequestItem(items[7]))
-        && (itemCount <= 8 || validRequestItem(items[8]))
-        && (itemCount <= 9 || validRequestItem(items[9]));
+        && (
+          itemCount <= 1
+          || items[0].id != items[1].id
+          || items[0].get("size", null) != items[1].get("size", null)
+        );
     }
 
     function validDeliveryLocation(location) {
@@ -377,6 +451,31 @@ service cloud.firestore {
           && location.lat <= 10.2900
           && location.lng >= 122.9100
           && location.lng <= 123.1300
+        );
+    }
+
+    function validDeliveryFee(barangay, fee) {
+      return (
+         barangay in [
+           "Barangay 1 Poblacion",
+           "Barangay 2 Poblacion",
+           "Barangay 3 Poblacion",
+           "Barangay 4 Poblacion",
+           "Barangay 5 Poblacion",
+           "Barangay 6 Poblacion",
+           "Barangay 7 Poblacion",
+           "Barangay 8 Poblacion",
+           "Barangay 9 Poblacion"
+         ]
+         && fee == 20
+        )
+        || (
+         barangay in ["Rumirang", "Guintubhan"]
+         && fee == 50
+        )
+        || (
+         barangay in ["Camangcamang", "Tinongan", "Maytubig"]
+         && fee == 60
         );
     }
 
@@ -409,6 +508,14 @@ service cloud.firestore {
         && validRequestItems(data.items)
         && data.orderType in ["takeout", "delivery", "dine-in"]
         && validText(data.address, 500)
+        && (
+          data.orderType == "delivery"
+            ? validDeliveryFee(
+                data.get("deliveryBarangay", null),
+                data.get("deliveryFee", null)
+              )
+            : !data.keys().hasAny(["deliveryBarangay", "deliveryFee"])
+        )
         && data.notes is string
         && data.notes.size() <= 1000
         && data.status == "pending";
@@ -416,14 +523,18 @@ service cloud.firestore {
 
     function validRequest(data) {
       return data.customerId == request.auth.uid
+        && data.keys().size() == (
+          10
+          + (data.keys().hasAny(["deliveryLocation"]) ? 1 : 0)
+          + (data.orderType == "delivery" ? 2 : 0)
+        )
         && (
           data.keys().hasAny(["deliveryLocation"])
           ? (
-            data.keys().size() == 11
-            && data.orderType == "delivery"
+            data.orderType == "delivery"
             && validDeliveryLocation(data.deliveryLocation)
           )
-          : data.keys().size() == 10
+          : true
         )
         && validRequestData(data)
         && (
@@ -447,7 +558,8 @@ service cloud.firestore {
 
     function menuReadyForOrderApproval() {
       return exists(migrationPath())
-        && get(migrationPath()).data.state == "ready";
+        && get(migrationPath()).data.state == "ready"
+        && exists(priceBookPath());
     }
 
     function approvedOrderItemMatches(orderItem, requestItem) {
@@ -460,28 +572,37 @@ service cloud.firestore {
     function approvedOrderItemsMatch(orderItems, requestItems) {
       return orderItems is list
         && orderItems.size() == requestItems.size()
-        && approvedOrderItemMatches(orderItems[0], requestItems[0])
-        && (orderItems.size() <= 1
-          || approvedOrderItemMatches(orderItems[1], requestItems[1]))
-        && (orderItems.size() <= 2
-          || approvedOrderItemMatches(orderItems[2], requestItems[2]))
-        && (orderItems.size() <= 3
-          || approvedOrderItemMatches(orderItems[3], requestItems[3]))
-        && (orderItems.size() <= 4
-          || approvedOrderItemMatches(orderItems[4], requestItems[4]))
-        && (orderItems.size() <= 5
-          || approvedOrderItemMatches(orderItems[5], requestItems[5]))
-        && (orderItems.size() <= 6
-          || approvedOrderItemMatches(orderItems[6], requestItems[6]))
-        && (orderItems.size() <= 7
-          || approvedOrderItemMatches(orderItems[7], requestItems[7]))
-        && (orderItems.size() <= 8
-          || approvedOrderItemMatches(orderItems[8], requestItems[8]))
-        && (orderItems.size() <= 9
-          || approvedOrderItemMatches(orderItems[9], requestItems[9]));
+        && approvedOrderItemMatches(orderItems[0], requestItems[0]);
     }
 
-    function validApprovedOrder(order, requestId, orderRequest) {
+    function approvedOrderItemMatchesPriceBook(orderItem, priceBook) {
+      let entry = priceBook.prices[orderItem.id];
+      return priceBook.prices.keys().hasAny([orderItem.id])
+        && validPriceEntry(entry)
+        && entry.available
+        && (
+          orderItem.keys().hasAny(["size"])
+            ? (
+              entry.keys().hasAny(["sizePricesCents"])
+              && entry.sizePricesCents[orderItem.size]
+                == math.round(orderItem.price * 100)
+            )
+            : entry.priceCents == math.round(orderItem.price * 100)
+        )
+        && orderItem.subtotal == orderItem.price * orderItem.quantity;
+    }
+
+    function approvedOrderItemsMatchPriceBook(orderItems, priceBook) {
+      return orderItems.size() >= 1
+        && approvedOrderItemMatchesPriceBook(orderItems[0], priceBook);
+    }
+
+    function validApprovedOrder(
+      order,
+      requestId,
+      orderRequest,
+      paymentSelection
+    ) {
       return order is map
         && order.keys().hasAll([
           "requestId",
@@ -494,16 +615,22 @@ service cloud.firestore {
           "notes",
           "items",
           "total",
+          "paymentMethod",
+          "paymentTiming",
           "status",
           "createdAt"
         ])
-        && (
-          orderRequest.keys().hasAny(["deliveryLocation"])
-          ? (
-            order.keys().size() == 13
-            && order.keys().hasAny(["deliveryLocation"])
+        && order.keys().size() == (
+          14
+          + (orderRequest.orderType == "delivery" ? 3 : 0)
+          + (orderRequest.keys().hasAny(["deliveryLocation"]) ? 1 : 0)
+          + (paymentSelection.method == "cash" ? 1 : 0)
+          + (
+            paymentSelection.method == "qr"
+            && paymentSelection.keys().hasAny(["paymentReference"])
+              ? 3
+              : 0
           )
-          : order.keys().size() == 12
         )
         && order.requestId == requestId
         && order.customerId == orderRequest.customerId
@@ -512,6 +639,33 @@ service cloud.firestore {
         && order.phone == orderRequest.phone
         && order.orderType == orderRequest.orderType
         && order.address == orderRequest.address
+        && order.paymentMethod == paymentSelection.method
+        && order.paymentTiming == paymentSelection.timing
+        && paymentSelection.requestId == requestId
+        && paymentSelection.customerId == order.customerId
+        && paymentSelection.method in ["cash", "qr"]
+        && paymentSelection.timing in ["advance", "pay_later"]
+        && (
+          (paymentSelection.method == "cash"
+            && paymentSelection.timing == "pay_later")
+          || (paymentSelection.method == "qr"
+            && paymentSelection.timing == "advance")
+        )
+        && (
+          paymentSelection.method == "qr"
+          && paymentSelection.keys().hasAny(["paymentReference"])
+            ? (
+              paymentSelection.keys().hasAll([
+                "paymentReference",
+                "paymentProofUrl",
+                "paymentStatus"
+              ])
+              && order.paymentReference == paymentSelection.paymentReference
+              && order.paymentProofUrl == paymentSelection.paymentProofUrl
+              && order.paymentStatus == paymentSelection.paymentStatus
+            )
+            : true
+        )
         && order.notes == orderRequest.notes
         && order.status == "Pending"
         && order.createdAt == request.time
@@ -522,13 +676,46 @@ service cloud.firestore {
             && order.deliveryLocation == orderRequest.deliveryLocation
           )
         )
+        && (
+          orderRequest.orderType == "delivery"
+            ? (
+              order.deliveryBarangay == orderRequest.deliveryBarangay
+              && order.deliveryFee == orderRequest.deliveryFee
+              && order.itemsSubtotal is number
+              && order.itemsSubtotal >= 0
+              && order.total == order.itemsSubtotal + order.deliveryFee
+            )
+            : !order.keys().hasAny([
+                "deliveryBarangay",
+                "deliveryFee",
+                "itemsSubtotal"
+              ])
+        )
+        && (
+          paymentSelection.method == "cash"
+            ? order.cashPaymentStatus == "unpaid"
+            : !order.keys().hasAny(["cashPaymentStatus"])
+        )
+        && (
+          paymentSelection.method != "cash"
+          || order.orderType == "dine-in"
+          || (
+            order.orderType == "delivery"
+              ? order.itemsSubtotal < 500
+              : order.total < 500
+          )
+        )
         && order.total is number
         && order.total >= 0
-        && approvedOrderItemsMatch(order.items, orderRequest.items);
+        && approvedOrderItemsMatch(order.items, orderRequest.items)
+        && (
+          order.items[0].id != "coffee"
+          || order.items[0].price == 4
+        );
     }
 
     function validRequestApproval(requestId) {
-      return isAdmin()
+      return isAdminOrStaff()
         && menuReadyForOrderApproval()
         && resource.data.status == "pending"
         && request.resource.data.keys().hasAll([
@@ -546,9 +733,7 @@ service cloud.firestore {
           "reviewedAt",
           "reviewedBy"
         ])
-        && request.resource.data.keys().size() == (
-          resource.data.keys().hasAny(["deliveryLocation"]) ? 14 : 13
-        )
+        && request.resource.data.keys().size() == resource.data.keys().size() + 3
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(["status", "orderId", "reviewedAt", "reviewedBy"])
         && request.resource.data.diff(resource.data).affectedKeys()
@@ -563,7 +748,7 @@ service cloud.firestore {
     }
 
     function validRequestRejection() {
-      return isAdmin()
+      return isAdminOrStaff()
         && resource.data.status == "pending"
         && request.resource.data.keys().hasAll([
           "customerId",
@@ -580,9 +765,7 @@ service cloud.firestore {
           "reviewedBy",
           "rejectionReason"
         ])
-        && request.resource.data.keys().size() == (
-          resource.data.keys().hasAny(["deliveryLocation"]) ? 14 : 13
-        )
+        && request.resource.data.keys().size() == resource.data.keys().size() + 3
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(["status", "reviewedAt", "reviewedBy", "rejectionReason"])
         && request.resource.data.diff(resource.data).affectedKeys()
@@ -597,7 +780,9 @@ service cloud.firestore {
 
     function validOrderCreation(orderId, order) {
       let requestPath = orderRequestPath(orderId);
-      return isAdmin()
+      let paymentSelectionPath =
+        /databases/$(database)/documents/paymentSelections/$(orderId);
+      return isAdminOrStaff()
         && menuReadyForOrderApproval()
         && exists(requestPath)
         && existsAfter(requestPath)
@@ -606,7 +791,13 @@ service cloud.firestore {
         && getAfter(requestPath).data.orderId == orderId
         && getAfter(requestPath).data.reviewedBy == request.auth.uid
         && getAfter(requestPath).data.customerId == order.customerId
-        && validApprovedOrder(order, orderId, get(requestPath).data);
+        && exists(paymentSelectionPath)
+        && validApprovedOrder(
+          order,
+          orderId,
+          get(requestPath).data,
+          get(paymentSelectionPath).data
+        );
     }
 
     function validPublicReview(data) {
@@ -640,6 +831,29 @@ service cloud.firestore {
             && data.photoURL.size() <= 500
           )
         );
+    }
+
+    function validAdminReviewModeration() {
+      let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+      return isAdmin()
+        && changedKeys.hasOnly([
+          "status",
+          "moderatedAt",
+          "moderatedBy"
+        ])
+        && changedKeys.hasAll([
+          "status",
+          "moderatedAt",
+          "moderatedBy"
+        ])
+        && request.resource.data.status in [
+          "Pending",
+          "Approved",
+          "Rejected",
+          "Hidden"
+        ]
+        && request.resource.data.moderatedAt == request.time
+        && request.resource.data.moderatedBy == request.auth.uid;
     }
 
     function menuPath(menuItemId) {
@@ -821,7 +1035,7 @@ service cloud.firestore {
       let itemId = request.resource.data.lastChangedMenuItemId;
       let menuBefore = get(menuPath(itemId));
       let menuAfter = getAfter(menuPath(itemId));
-      return isAdmin()
+      return isAdminOrStaff()
         && menuWritesAllowed()
         && bookMetadataValid(request.resource.data)
         && request.resource.data.revision == 1
@@ -850,7 +1064,7 @@ service cloud.firestore {
       let menuAfter = getAfter(menuPath(itemId));
       let newPrices = request.resource.data.prices;
       let oldPrices = resource.data.prices;
-      return isAdmin()
+      return isAdminOrStaff()
         && menuWritesAllowed()
         && bookMetadataValid(request.resource.data)
         && request.resource.data.diff(resource.data).affectedKeys()
@@ -951,6 +1165,28 @@ service cloud.firestore {
       return /databases/$(database)/documents/paymentRecords/$(orderId)/submissions/$(submissionId);
     }
 
+    function paymentReferencePath(reference) {
+      return /databases/$(database)/documents/paymentReferences/$(reference);
+    }
+
+    function validNormalizedPaymentReference(reference) {
+      return reference is string
+        && reference.size() >= 1
+        && reference.size() <= 100
+        && reference.matches("^[A-Z0-9]+$");
+    }
+
+    function validPaymentReferenceClaim(reference, sourceType) {
+      let registryPath = paymentReferencePath(reference);
+      return validNormalizedPaymentReference(reference)
+        && !exists(registryPath)
+        && existsAfter(registryPath)
+        && getAfter(registryPath).data.normalizedReference == reference
+        && getAfter(registryPath).data.sourceType == sourceType
+        && getAfter(registryPath).data.createdBy == request.auth.uid
+        && getAfter(registryPath).data.createdAt == request.time;
+    }
+
     function validPaymentRecord(data) {
       return data is map
         && data.keys().size() == 14
@@ -996,10 +1232,7 @@ service cloud.firestore {
     }
 
     function validPaymentReference(value) {
-      return value is string
-        && value.size() >= 1
-        && value.size() <= 100
-        && value.matches(".*\\S.*");
+      return validNormalizedPaymentReference(value);
     }
 
     function validPaymentReason(value) {
@@ -1057,6 +1290,10 @@ service cloud.firestore {
       return data.customerId == request.auth.uid
         && data.orderId == orderId
         && validPaymentSubmission(data)
+        && validPaymentReferenceClaim(
+          data.referenceNumber,
+          "order_payment"
+        )
         && validPaymentAttemptId(submissionId, data.attemptNumber)
         && data.submittedAt == request.time
         && data.status == "pending_review"
@@ -1147,7 +1384,7 @@ service cloud.firestore {
         orderId,
         before.currentSubmissionId
       );
-      return isAdmin()
+      return isAdminOrStaff()
         && validPaymentRecord(before)
         && before.orderId == orderId
         && before.paymentStatus == "pending_review"
@@ -1217,7 +1454,7 @@ service cloud.firestore {
       let recordPath = paymentRecordPath(orderId);
       let before = resource.data;
       let after = request.resource.data;
-      return isAdmin()
+      return isAdminOrStaff()
         && validPaymentSubmission(before)
         && before.orderId == orderId
         && before.status == "pending_review"
@@ -1274,12 +1511,7 @@ service cloud.firestore {
     function validAdminPaymentResolution(orderId) {
       let before = resource.data;
       let after = request.resource.data;
-      let finalSubmissionPath = paymentSubmissionPath(
-        orderId,
-        "attempt-3"
-      );
-      return isAdmin()
-        && validPaymentRecord(before)
+      return isAdminOrStaff()
         && before.orderId == orderId
         && before.paymentStatus == "admin_review_required"
         && before.attemptCount == 3
@@ -1289,20 +1521,6 @@ service cloud.firestore {
         && before.resolutionReason == ""
         && before.resolvedAt == null
         && before.resolvedBy == ""
-        && exists(finalSubmissionPath)
-        && get(finalSubmissionPath).data.orderId == orderId
-        && get(finalSubmissionPath).data.customerId == before.customerId
-        && get(finalSubmissionPath).data.attemptNumber == 3
-        && get(finalSubmissionPath).data.status == "rejected"
-        && after.diff(before).affectedKeys().hasOnly([
-          "paymentStatus",
-          "updatedAt",
-          "verifiedAt",
-          "verifiedBy",
-          "resolutionReason",
-          "resolvedAt",
-          "resolvedBy"
-        ])
         && after.paymentStatus in ["paid", "rejected"]
         && after.updatedAt == request.time
         && after.resolvedAt == request.time
@@ -1312,7 +1530,6 @@ service cloud.firestore {
             after.paymentStatus == "paid"
             && after.verifiedAt == request.time
             && after.verifiedBy == request.auth.uid
-            && after.resolutionReason == ""
           )
           || (
             after.paymentStatus == "rejected"
@@ -1323,13 +1540,310 @@ service cloud.firestore {
         );
     }
 
+    function validOperationalOrderStatusUpdate(orderId) {
+      return isAdminOrStaff()
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["status"])
+        && (
+          request.resource.data.status in [
+            "Pending",
+            "Confirmed",
+            "Preparing",
+            "Ready",
+            "Ready for Pickup",
+            "Out for Delivery",
+            "Completed",
+            "Cancelled"
+          ]
+          || (
+            request.resource.data.status == "On Hold"
+            && resource.data.paymentMethod == "cash"
+            && resource.data.cashPaymentStatus == "unpaid"
+          )
+        );
+    }
+
+    function validCashPaymentUpdate() {
+      return isAdminOrStaff()
+        && resource.data.paymentMethod == "cash"
+        && resource.data.cashPaymentStatus == "unpaid"
+        && resource.data.status != "Cancelled"
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly([
+            "cashPaymentStatus",
+            "cashPaymentAt",
+            "cashPaymentBy"
+          ])
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasAll([
+            "cashPaymentStatus",
+            "cashPaymentAt",
+            "cashPaymentBy"
+          ])
+        && request.resource.data.keys().size() == resource.data.keys().size() + 2
+        && request.resource.data.cashPaymentStatus == "paid"
+        && request.resource.data.cashPaymentAt == request.time
+        && request.resource.data.cashPaymentBy == request.auth.uid;
+    }
+
+    function validQrPaymentStatusUpdate() {
+      let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+      return isAdminOrStaff()
+        && resource.data.paymentMethod == "qr"
+        && (
+          !resource.data.keys().hasAny(["paymentStatus"])
+          || resource.data.paymentStatus in [
+            "pending_verification",
+            "needs_review",
+            "rejected"
+          ]
+        )
+        && request.resource.data.paymentStatus in [
+          "paid",
+          "needs_review",
+          "rejected"
+        ]
+        && changedKeys.hasOnly([
+            "paymentStatus",
+            "paymentStatusUpdatedAt",
+            "paymentStatusUpdatedBy"
+          ])
+        && changedKeys.hasAll([
+            "paymentStatus",
+            "paymentStatusUpdatedAt"
+          ])
+        && request.resource.data.keys().hasAll([
+          "paymentStatus",
+          "paymentStatusUpdatedAt",
+          "paymentStatusUpdatedBy"
+        ])
+        && request.resource.data.paymentStatus != resource.data.paymentStatus
+        && request.resource.data.paymentStatusUpdatedAt == request.time
+        && request.resource.data.paymentStatusUpdatedBy == request.auth.uid
+        && (
+          request.resource.data.paymentStatus != "paid"
+          || (
+            (
+              resource.data.paymentReference is string
+              && resource.data.paymentReference.matches("^[0-9]{13}$")
+              && resource.data.paymentProofUrl is string
+              && resource.data.paymentProofUrl.size() > 0
+            )
+            || !resource.data.keys().hasAny([
+              "paymentReference",
+              "paymentProofUrl"
+            ])
+          )
+        );
+    }
+
+    function validDeliveryArrivalUpdate() {
+      return isAdminOrStaff()
+        && resource.data.orderType == "delivery"
+        && resource.data.status == "Out for Delivery"
+        && (
+          resource.data.paymentMethod != "cash"
+          || resource.data.cashPaymentStatus == "unpaid"
+        )
+        && !resource.data.keys().hasAny([
+          "deliveryArrivalAt",
+          "deliveryArrivalBy"
+        ])
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["deliveryArrivalAt", "deliveryArrivalBy"])
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasAll(["deliveryArrivalAt", "deliveryArrivalBy"])
+        && request.resource.data.keys().size() == resource.data.keys().size() + 2
+        && request.resource.data.deliveryArrivalAt == request.time
+        && request.resource.data.deliveryArrivalBy == request.auth.uid;
+    }
+
+    function validWaitingFeeUpdate() {
+      return isAdminOrStaff()
+        && resource.data.orderType == "delivery"
+        && resource.data.status == "Out for Delivery"
+        && (
+          resource.data.paymentMethod != "cash"
+          || resource.data.cashPaymentStatus == "unpaid"
+        )
+        && resource.data.keys().hasAll([
+          "deliveryArrivalAt",
+          "deliveryArrivalBy"
+        ])
+        && !resource.data.keys().hasAny([
+          "waitingFee",
+          "waitingFeeApplied",
+          "waitingFeeAppliedAt",
+          "waitingFeeAppliedBy"
+        ])
+        && request.time >= resource.data.deliveryArrivalAt
+          + duration.value(10, "m")
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly([
+            "waitingFee",
+            "waitingFeeApplied",
+            "waitingFeeAppliedAt",
+            "waitingFeeAppliedBy"
+          ])
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasAll([
+            "waitingFee",
+            "waitingFeeApplied",
+            "waitingFeeAppliedAt",
+            "waitingFeeAppliedBy"
+          ])
+        && request.resource.data.keys().size() == resource.data.keys().size() + 4
+        && request.resource.data.waitingFee == 20
+        && request.resource.data.waitingFeeApplied == true
+        && request.resource.data.waitingFeeAppliedAt == request.time
+        && request.resource.data.waitingFeeAppliedBy == request.auth.uid;
+    }
+
+    function validUnreachableOrderUpdate() {
+      let affectedKeys =
+        request.resource.data.diff(resource.data).affectedKeys();
+      let alreadyAppliedFee =
+        resource.data.get("waitingFee", null) == 20
+        && resource.data.get("waitingFeeAppliedAt", null) is timestamp
+        && resource.data.get("waitingFeeAppliedBy", null) is string;
+      let waitingFeeFieldsAbsent = !resource.data.keys().hasAny([
+        "waitingFee",
+        "waitingFeeApplied",
+        "waitingFeeAppliedAt",
+        "waitingFeeAppliedBy"
+      ]);
+
+      return isAdminOrStaff()
+        && resource.data.orderType == "delivery"
+        && resource.data.status == "Out for Delivery"
+        && resource.data.paymentMethod == "cash"
+        && resource.data.cashPaymentStatus == "unpaid"
+        && resource.data.keys().hasAll([
+          "deliveryArrivalAt",
+          "deliveryArrivalBy"
+        ])
+        && !resource.data.keys().hasAny([
+          "unreachableAt",
+          "unreachableBy",
+          "unreachableReason"
+        ])
+        && request.time >= resource.data.deliveryArrivalAt
+          + duration.value(10, "m")
+        && request.resource.data.status == "Unreachable"
+        && request.resource.data.unreachableAt == request.time
+        && request.resource.data.unreachableBy == request.auth.uid
+        && request.resource.data.unreachableReason
+          == "Customer could not be reached after the 10-minute delivery grace period."
+        && affectedKeys.hasAll([
+          "status",
+          "unreachableAt",
+          "unreachableBy",
+          "unreachableReason"
+        ])
+        && request.resource.data.waitingFee == 20
+        && request.resource.data.waitingFeeApplied == true
+        && (
+          (
+            alreadyAppliedFee
+            && affectedKeys.hasOnly([
+              "status",
+              "unreachableAt",
+              "unreachableBy",
+              "unreachableReason",
+              "waitingFeeApplied"
+            ])
+            && request.resource.data.waitingFeeAppliedAt
+              == resource.data.waitingFeeAppliedAt
+            && request.resource.data.waitingFeeAppliedBy
+              == resource.data.waitingFeeAppliedBy
+          )
+          || (
+            waitingFeeFieldsAbsent
+            && affectedKeys.hasOnly([
+              "status",
+              "unreachableAt",
+              "unreachableBy",
+              "unreachableReason",
+              "waitingFee",
+              "waitingFeeApplied",
+              "waitingFeeAppliedAt",
+              "waitingFeeAppliedBy"
+            ])
+            && affectedKeys.hasAll([
+              "waitingFee",
+              "waitingFeeApplied",
+              "waitingFeeAppliedAt",
+              "waitingFeeAppliedBy"
+            ])
+            && request.resource.data.keys().size()
+              == resource.data.keys().size() + 7
+            && request.resource.data.waitingFeeAppliedAt == request.time
+            && request.resource.data.waitingFeeAppliedBy == request.auth.uid
+          )
+        );
+    }
+
+    function validDeliveryProofUpdate() {
+      return isAdminOrStaff()
+        && resource.data.orderType == "delivery"
+        && resource.data.status in ["Out for Delivery", "Completed"]
+        && !resource.data.keys().hasAny([
+          "deliveryProofUrl",
+          "deliveryProofRecordedAt",
+          "deliveryProofRecordedBy"
+        ])
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly([
+            "deliveryProofUrl",
+            "deliveryProofRecordedAt",
+            "deliveryProofRecordedBy"
+          ])
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasAll([
+            "deliveryProofUrl",
+            "deliveryProofRecordedAt",
+            "deliveryProofRecordedBy"
+          ])
+        && request.resource.data.keys().size() == resource.data.keys().size() + 3
+        && request.resource.data.deliveryProofUrl is string
+        && request.resource.data.deliveryProofUrl.size() <= 2048
+        && request.resource.data.deliveryProofUrl.matches(
+          "^https://[^/?#@\\s]+([/?#][^\\s]*)?$"
+        )
+        && request.resource.data.deliveryProofRecordedAt == request.time
+        && request.resource.data.deliveryProofRecordedBy == request.auth.uid;
+    }
+
+    function validEmbeddedOrderStatusUpdate() {
+      return isAdminOrStaff()
+        && resource.data.status == "approved"
+        && resource.data.keys().hasAny(["approvedOrder"])
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["orderStatus"])
+        && request.resource.data.orderStatus in [
+          "Pending",
+          "Confirmed",
+          "Preparing",
+          "Ready",
+          "Ready for Pickup",
+          "Out for Delivery",
+          "Completed",
+          "Cancelled"
+        ];
+    }
+
     match /paymentSelections/{requestId} {
-      allow get, list: if isAdmin()
+      allow get, list: if isAdminOrStaff()
         || (signedIn() && resource.data.customerId == request.auth.uid);
 
       allow create: if signedIn()
         && !isAdmin()
-        && request.resource.data.keys().size() == 6
+        && request.resource.data.keys().size() == (
+          request.resource.data.method == "qr"
+            && request.resource.data.keys().hasAny(["paymentReference"])
+              ? 9
+              : 6
+        )
         && request.resource.data.keys().hasAll([
           "requestId",
           "customerId",
@@ -1342,6 +1856,30 @@ service cloud.firestore {
         && request.resource.data.customerId == request.auth.uid
         && request.resource.data.method in ["cash", "qr"]
         && request.resource.data.timing in ["advance", "pay_later"]
+        && (
+          request.resource.data.keys().hasAny(["paymentReference"])
+            ? (
+              request.resource.data.method == "qr"
+              && request.resource.data.keys().hasAll([
+                "paymentReference",
+                "paymentProofUrl",
+                "paymentStatus"
+              ])
+              && request.resource.data.paymentReference is string
+              && request.resource.data.paymentReference.matches("^[0-9]{13}$")
+              && validPaymentReferenceClaim(
+                request.resource.data.paymentReference,
+                "checkout"
+              )
+              && request.resource.data.paymentProofUrl is string
+              && request.resource.data.paymentProofUrl.size() <= 350000
+              && request.resource.data.paymentProofUrl.matches(
+                "^data:image/jpeg;base64,[A-Za-z0-9+/]+=*$"
+              )
+              && request.resource.data.paymentStatus == "pending_verification"
+            )
+            : true
+        )
         && request.resource.data.createdAt == request.time
         && request.resource.data.updatedAt == request.time
         && !exists(/databases/$(database)/documents/orderRequests/$(requestId))
@@ -1383,19 +1921,26 @@ service cloud.firestore {
     }
 
     match /paymentRecords/{orderId} {
-      allow get, list: if isAdmin()
+      allow get, list: if isAdminOrStaff()
         || (signedIn() && resource.data.customerId == request.auth.uid);
 
       allow create: if validInitialPaymentRecord(orderId);
 
       allow update: if validCustomerPaymentRetry(orderId)
         || validAdminPaymentReview(orderId)
-        || validAdminPaymentResolution(orderId);
+        || validAdminPaymentResolution(orderId)
+        || (
+          isStaff()
+          && resource.data.paymentStatus == "admin_review_required"
+          && resource.data.attemptCount == 3
+          && resource.data.currentSubmissionId == "attempt-3"
+          && request.resource.data.paymentStatus == "paid"
+        );
 
       allow delete: if false;
 
       match /submissions/{submissionId} {
-        allow get, list: if isAdmin()
+        allow get, list: if isAdminOrStaff()
           || (
             signedIn()
             && resource.data.customerId == request.auth.uid
@@ -1449,8 +1994,7 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if request.auth != null
         && (request.auth.uid == userId
-          || (exists(/databases/$(database)/documents/users/$(request.auth.uid))
-            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin"));
+          || isAdmin());
 
       allow create: if request.auth != null
         && request.auth.uid == userId
@@ -1467,18 +2011,68 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /paymentReferences/{referenceId} {
+      allow get: if signedIn() || isAdminOrStaff();
+      allow list: if isAdminOrStaff();
+
+      allow create: if isAdminOrStaff()
+        || (
+          signedIn()
+          && !exists(paymentReferencePath(referenceId))
+          && request.resource.data.keys().size() == 4
+          && request.resource.data.keys().hasAll([
+            "normalizedReference",
+            "sourceType",
+            "createdBy",
+            "createdAt"
+          ])
+          && request.resource.data.keys().hasOnly([
+            "normalizedReference",
+            "sourceType",
+            "createdBy",
+            "createdAt"
+          ])
+          && request.resource.data.normalizedReference == referenceId
+          && validNormalizedPaymentReference(referenceId)
+          && request.resource.data.sourceType in [
+            "checkout",
+            "reservation",
+            "order_payment"
+          ]
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time
+        );
+
+      allow update, delete: if isAdminOrStaff();
+    }
+
     match /phoneRegistry/{phone} {
-      allow get: if signedIn();
+      allow get: if isAdminOrStaff()
+        || (
+          signedIn()
+          && (
+            !exists(phoneRegistryPath(phone))
+            || resource.data.uid == request.auth.uid
+          )
+        );
       allow list: if false;
 
       allow create: if signedIn()
-        && (request.resource.data.uid == request.auth.uid || isAdmin())
         && phone.matches("^09[0-9]{9}$")
         && request.resource.data.keys().size() == 3
         && request.resource.data.keys().hasAll(["uid", "phone", "updatedAt"])
         && request.resource.data.uid is string
         && request.resource.data.phone == phone
-        && request.resource.data.updatedAt == request.time;
+        && request.resource.data.updatedAt == request.time
+        && existsAfter(phoneClaimPath(phone))
+        && getAfter(phoneClaimPath(phone)).data.phone == phone
+        && (
+          isAdmin()
+          || (
+            request.resource.data.uid == request.auth.uid
+            && userProfileHasPhoneAfter(request.auth.uid, phone)
+          )
+        );
 
       allow update: if signedIn()
         && phone.matches("^09[0-9]{9}$")
@@ -1486,24 +2080,65 @@ service cloud.firestore {
         && request.resource.data.keys().size() == 3
         && request.resource.data.keys().hasAll(["uid", "phone", "updatedAt"])
         && (
-          request.resource.data.uid == request.auth.uid
-          || isAdmin()
+          isAdmin()
+          || (
+            request.resource.data.uid == request.auth.uid
+            && userProfileHasPhoneAfter(request.auth.uid, phone)
+          )
         )
         && request.resource.data.phone == phone
-        && request.resource.data.updatedAt == request.time;
+        && request.resource.data.updatedAt == request.time
+        && existsAfter(phoneClaimPath(phone))
+        && getAfter(phoneClaimPath(phone)).data.phone == phone;
 
       allow delete: if signedIn()
-        && (resource.data.uid == request.auth.uid || isAdmin());
+        && (resource.data.uid == request.auth.uid || isAdmin())
+        && !existsAfter(phoneClaimPath(phone));
+    }
+
+    match /phoneClaims/{phone} {
+      allow get: if signedIn();
+      allow list: if false;
+
+      allow create: if signedIn()
+        && !exists(phoneClaimPath(phone))
+        && phone.matches("^09[0-9]{9}$")
+        && request.resource.data.keys().hasOnly(["phone"])
+        && request.resource.data.phone == phone
+        && existsAfter(phoneRegistryPath(phone))
+        && getAfter(phoneRegistryPath(phone)).data.phone == phone
+        && (
+          isAdmin()
+          || (
+            getAfter(phoneRegistryPath(phone)).data.uid == request.auth.uid
+            && userProfileHasPhoneAfter(request.auth.uid, phone)
+          )
+        );
+
+      allow update: if false;
+
+      allow delete: if signedIn()
+        && !existsAfter(phoneRegistryPath(phone))
+        && (
+          isAdmin()
+          || (
+            exists(phoneRegistryPath(phone))
+            && get(phoneRegistryPath(phone)).data.uid == request.auth.uid
+          )
+          || userProfileHasPhone(request.auth.uid, phone)
+        );
     }
 
     match /blockedPhones/{phone} {
-      allow get: if request.auth != null;
-      allow list: if isAdmin();
+      allow get: if isAdminOrStaff()
+        || customerOwnsProfilePhone(phone)
+        || (signedIn() && !exists(/databases/$(database)/documents/blockedPhones/$(phone)));
+      allow list: if isAdminOrStaff();
 
-      allow create, update: if isAdmin()
+      allow create, update: if isAdminOrStaff()
         && validBlockedPhone(request.resource.data, phone);
 
-      allow delete: if isAdmin();
+      allow delete: if isAdminOrStaff();
     }
 
     match /phoneRestorationRequests/{requestId} {
@@ -1549,7 +2184,7 @@ service cloud.firestore {
     }
 
     match /orderRequests/{requestId} {
-      allow get, list: if isAdmin()
+      allow get, list: if isAdminOrStaff()
         || (signedIn() && resource.data.customerId == request.auth.uid);
 
       allow create: if signedIn()
@@ -1557,7 +2192,8 @@ service cloud.firestore {
         && phoneIsNotBlocked(request.resource.data.phone);
 
       allow update: if validRequestApproval(requestId)
-        || validRequestRejection();
+        || validRequestRejection()
+        || validEmbeddedOrderStatusUpdate();
       allow delete: if false;
     }
 
@@ -1566,16 +2202,23 @@ service cloud.firestore {
 
       allow read: if request.auth != null
         && (resource.data.customerId == request.auth.uid
-          || (exists(/databases/$(database)/documents/users/$(request.auth.uid))
-            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin"));
+          || isAdminOrStaff());
 
-      allow update, delete: if request.auth != null
-        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
+      allow update: if isAdminOrStaff()
+        && (
+          validQrPaymentStatusUpdate()
+          || validOperationalOrderStatusUpdate(orderId)
+          || validCashPaymentUpdate()
+          || validDeliveryArrivalUpdate()
+          || validWaitingFeeUpdate()
+          || validUnreachableOrderUpdate()
+          || validDeliveryProofUpdate()
+        );
+      allow delete: if isAdmin();
     }
 
     match /notifications/{notificationId} {
-      allow create: if isAdmin()
+      allow create: if isAdminOrStaff()
         && validNotification(request.resource.data);
 
       allow get, list: if signedIn()
@@ -1609,6 +2252,7 @@ service cloud.firestore {
           "remainingBalance",
           "paymentMethod",
           "paymentReference",
+          "paymentProofUrl",
           "paymentStatus"
         ])
         && data.keys().hasOnly([
@@ -1629,6 +2273,7 @@ service cloud.firestore {
           "remainingBalance",
           "paymentMethod",
           "paymentReference",
+          "paymentProofUrl",
           "paymentStatus"
         ])
         && data.userId == request.auth.uid
@@ -1652,8 +2297,15 @@ service cloud.firestore {
         && data.selectedPaymentOption in ["full", "half"]
         && data.paymentMethod == "qr"
         && data.paymentReference is string
-        && data.paymentReference.size() > 0
-        && data.paymentReference.size() <= 100
+        && validPaymentReferenceClaim(
+          data.paymentReference,
+          "reservation"
+        )
+        && data.paymentProofUrl is string
+        && data.paymentProofUrl.size() <= 350000
+        && data.paymentProofUrl.matches(
+          '^data:image/jpeg;base64,[A-Za-z0-9+/]+={0,2}$'
+        )
         && data.amountPaidNow is int
         && data.amountPaidNow == (
           data.selectedPaymentOption == "full"
@@ -1672,12 +2324,10 @@ service cloud.firestore {
 
       allow read: if request.auth != null
         && (resource.data.userId == request.auth.uid
-          || (exists(/databases/$(database)/documents/users/$(request.auth.uid))
-            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin"));
+          || isAdminOrStaff());
 
-      allow update, delete: if request.auth != null
-        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
+      allow update: if isAdminOrStaff();
+      allow delete: if isAdmin();
     }
 
     match /reviews/{reviewId} {
@@ -1688,8 +2338,16 @@ service cloud.firestore {
         && (resource.data.customerId == request.auth.uid
           || isAdmin());
 
-      allow update: if false;
-      allow delete: if false;
+      allow update: if validAdminReviewModeration();
+      allow delete: if isAdmin()
+        && (
+          !exists(
+            /databases/$(database)/documents/publicReviews/$(reviewId)
+          )
+          || !existsAfter(
+            /databases/$(database)/documents/publicReviews/$(reviewId)
+          )
+        );
     }
 
     match /publicReviews/{reviewId} {
@@ -1708,19 +2366,26 @@ service cloud.firestore {
           && getAfter(
             /databases/$(database)/documents/reviews/$(reviewId)
           ).data.customerId == request.auth.uid
+          && getAfter(
+            /databases/$(database)/documents/reviews/$(reviewId)
+          ).data.rating == request.resource.data.rating
+          && getAfter(
+            /databases/$(database)/documents/reviews/$(reviewId)
+          ).data.comment == request.resource.data.comment
         );
 
-      allow update: if false;
-      allow delete: if false;
+      allow update: if isAdmin()
+        && validPublicReview(request.resource.data);
+      allow delete: if isAdmin();
     }
 
     match /menuItems/{menuItemId} {
       allow read: if true;
-      allow create: if isAdmin()
+      allow create: if isAdminOrStaff()
         && validMenuItem(request.resource.data)
         && request.resource.data.menuRevision == 1
         && menuCreatePaired(menuItemId, request.resource.data);
-      allow update: if isAdmin()
+      allow update: if isAdminOrStaff()
         && validMenuItem(request.resource.data)
         && (
           resource.data.keys().hasAny(["menuRevision"])
@@ -1729,19 +2394,35 @@ service cloud.firestore {
               && request.resource.data.menuRevision == 1
         )
         && menuUpdatePaired(menuItemId, request.resource.data);
-      allow delete: if isAdmin() && menuDeletePaired(menuItemId);
+      allow delete: if isAdminOrStaff() && menuDeletePaired(menuItemId);
     }
 
     match /menuControl/current {
-      allow get: if isAdmin();
+      allow get: if isAdminOrStaff();
       allow list: if false;
       allow create: if validPriceBookCreate();
       allow update: if validPriceBookUpdate();
       allow delete: if false;
     }
 
+    match /cafeSettings/delivery {
+      allow get: if true;
+      allow list: if false;
+      allow create, update: if isAdmin()
+        && request.resource.data.keys().size() == 3
+        && request.resource.data.keys().hasAll([
+          "disableSundayDelivery",
+          "updatedAt",
+          "updatedBy"
+        ])
+        && request.resource.data.disableSundayDelivery is bool
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.updatedBy == request.auth.uid;
+      allow delete: if false;
+    }
+
     match /menuControl/migration {
-      allow get: if isAdmin();
+      allow get: if isAdminOrStaff();
       allow list: if false;
       allow create: if isMigrationOperator()
         && validMigrationState(request.resource.data)

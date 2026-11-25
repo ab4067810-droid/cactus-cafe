@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { signOut } from "firebase/auth";
 import { useAuth } from "../context/Authcontext";
 import { auth } from "../services/firebase";
+import { getEffectiveRole } from "../utils/userRole";
 
 import {
   registerCustomer,
@@ -100,10 +101,12 @@ function Register() {
   const continueWithProfile = (profile) => {
     const destinations = {
       customer: "/menu",
-      admin: "/admin/menu",
+      admin: "/admin/monthly-records",
+      staff: "/admin/orders",
       voter: "/voter",
     };
-    const destination = destinations[profile?.role];
+    const destination =
+      destinations[getEffectiveRole(profile) || profile?.role];
 
     if (!destination) {
       setCanRetryProfile(false);
@@ -181,7 +184,7 @@ function Register() {
         password,
         consent
       );
-      if (profile?.role === "customer") {
+      if (getEffectiveRole(profile) === "customer") {
         setShowRegistrationSuccess(true);
       } else {
         continueWithProfile(profile);
@@ -230,9 +233,10 @@ function Register() {
       setIsGoogleLoading(true);
       const { profile } = await registerWithGoogle(consent);
 
-      if (profile?.role !== "admin" && profile?.role !== "customer") {
+      const userRole = getEffectiveRole(profile);
+      if (!["admin", "staff", "customer"].includes(userRole)) {
         setErrorMessage(
-          "Your account does not have a valid customer or admin role. Please contact the administrator."
+          "Your account does not have a valid customer, staff, or admin role. Please contact the administrator."
         );
         return;
       }
@@ -291,11 +295,12 @@ function Register() {
 
       if (
         canRetryGoogleProfile
-        && profile?.role !== "admin"
-        && profile?.role !== "customer"
+        && !["admin", "staff", "customer"].includes(
+          getEffectiveRole(profile),
+        )
       ) {
         setErrorMessage(
-          "Your account does not have a valid customer or admin role. Please contact the administrator."
+          "Your account does not have a valid customer, staff, or admin role. Please contact the administrator."
         );
         return;
       }

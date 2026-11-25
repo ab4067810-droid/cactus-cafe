@@ -20,6 +20,7 @@ import {
   normalizePHPhone,
   PH_PHONE_VALIDATION_ERROR,
 } from "../utils/phoneUtils.js";
+import { getEffectiveRole } from "../utils/userRole";
 import "../styles/MyAccount.css";
 
 const PHONE_EDIT_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;
@@ -347,9 +348,14 @@ function MyAccount() {
     if (!role) return undefined;
 
     if (role !== "customer") {
-      navigate(role === "admin" ? "/admin/menu" : "/login", {
-        replace: true,
-      });
+      navigate(
+        role === "admin"
+          ? "/admin/monthly-records"
+          : role === "staff"
+            ? "/admin/orders"
+            : "/login",
+        { replace: true },
+      );
       return undefined;
     }
 
@@ -373,7 +379,7 @@ function MyAccount() {
 
         const profile = profileSnapshot.data();
 
-        if (profile.role !== "customer") {
+        if (getEffectiveRole(profile) !== "customer") {
           setProfileDocument(null);
           setLoadError("This page is only available to customer accounts.");
           return;
@@ -600,13 +606,24 @@ function MyAccount() {
       <main className="my-account-page">
         <section
           className="my-account-container account-loading"
+          role="status"
           aria-busy="true"
           aria-label="Loading your account"
         >
           <div className="account-loading-line short" />
           <div className="account-loading-line large" />
-          <div className="account-loading-card" />
-          <p role="status">Loading your account information...</p>
+          <div className="account-loading-card" aria-hidden="true">
+            <div className="account-loading-card-heading">
+              <span />
+              <span />
+            </div>
+            <div className="account-loading-fields">
+              {[1, 2, 3, 4, 5, 6].map((field) => (
+                <span className="account-loading-field" key={field} />
+              ))}
+            </div>
+            <div className="account-loading-action" />
+          </div>
         </section>
       </main>
     );
@@ -710,9 +727,19 @@ function MyAccount() {
                     value={form.phone}
                     disabled={phoneEditDisabled}
                     aria-describedby={
-                      phoneEditDisabled ? "phone-cooldown-notice" : undefined
+                      phoneEditDisabled
+                        ? "phone-guidance-notice phone-cooldown-notice"
+                        : "phone-guidance-notice"
                     }
                   />
+                  <small
+                    className="account-phone-guidance"
+                    id="phone-guidance-notice"
+                  >
+                    Please provide an active mobile number. We use this to
+                    confirm and coordinate your order—unreachable numbers may
+                    result in order cancellation.
+                  </small>
                   {phoneEditDisabled && (
                     <small
                       className="account-phone-cooldown"
@@ -849,6 +876,7 @@ function MyAccount() {
                   <span>Delivery pin <small>Optional</small></span>
                   <IsabelaDeliveryMap
                     location={form.deliveryLocation}
+                    selectedBarangay={form.barangay}
                     onChange={(deliveryLocation) => {
                       setForm((currentForm) => ({
                         ...currentForm,

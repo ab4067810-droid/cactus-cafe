@@ -16,7 +16,10 @@ import {
 } from "firebase/firestore";
 import { NavLink, useNavigate } from "react-router-dom";
 
+import AdminWorkspaceNavigation from "../components/AdminWorkspaceNavigation";
+import AdminLoadingSkeleton from "../components/AdminLoadingSkeleton";
 import { auth, db } from "../services/firebase";
+import { getEffectiveRole } from "../utils/userRole";
 import {
   blockPhone,
   listBlockedPhones,
@@ -58,7 +61,7 @@ const getUserName = (user) =>
   "Unnamed user";
 
 const getUserRole = (user) =>
-  String(user.role || "customer").toLowerCase();
+  getEffectiveRole(user) || "customer";
 
 const getUserPhone = (user) =>
   String(user.phoneNumber || user.phone || "").trim();
@@ -307,9 +310,14 @@ function AdminUsers() {
           const currentUserData =
             currentUserSnapshot.data();
 
-          if (currentUserData.role !== "admin") {
+          const userRole = getEffectiveRole(currentUserData);
+
+          if (userRole !== "admin") {
             alert("Access denied. Admin account required.");
-            navigate("/customer", { replace: true });
+            navigate(
+              userRole === "staff" ? "/admin/orders" : "/menu",
+              { replace: true },
+            );
             return;
           }
 
@@ -780,24 +788,6 @@ function AdminUsers() {
       setResettingCooldownUid("");
     }
   };
-  if (loading) {
-    return (
-      <main className="admin-users-page">
-        <section className="admin-users-loading">
-          <div className="loading-icon">◎</div>
-
-          <p className="admin-users-eyebrow">
-            CACTUS CAFE
-          </p>
-
-          <h1>Loading user workspace</h1>
-
-          <div className="loading-bar" />
-        </section>
-      </main>
-    );
-  }
-
   return (
     <main className="admin-users-page">
       {mobileNavigationOpen && (
@@ -816,11 +806,11 @@ function AdminUsers() {
         aria-label="Admin navigation"
       >
         <NavLink
-          to="/admin/menu"
+          to="/admin/monthly-records"
           className="admin-users-brand"
           onClick={() => setMobileNavigationOpen(false)}
         >
-          <span className="admin-users-brand-mark" aria-hidden="true">🌵</span>
+          <span className="admin-users-brand-mark" aria-hidden="true">C</span>
           <span>
             <strong>Cactus Café</strong>
             <small>ADMIN WORKSPACE</small>
@@ -829,30 +819,10 @@ function AdminUsers() {
 
         <div className="admin-users-sidebar-label">WORKSPACE</div>
         <nav className="admin-users-nav">
-          {[
-            ["▦", "Menu Management", "/admin/menu"],
-            ["↗", "Orders", "/admin/orders"],
-            ["₱", "Payment Management", "/admin/payments"],
-            ["◷", "Reservations", "/admin/reservations"],
-            ["☆", "Reviews", "/admin/reviews"],
-            ["◎", "Customers & Security", "/admin/users"],
-            ["▤", "Monthly Records", "/admin/monthly-records"],
-          ].map(([icon, label, to]) => (
-            <NavLink
-              key={to}
-              to={to}
-              end
-              className={({ isActive }) =>
-                `admin-users-nav-link${isActive ? " active" : ""}`
-              }
-              onClick={() => setMobileNavigationOpen(false)}
-            >
-              <span className="admin-users-nav-icon" aria-hidden="true">
-                {icon}
-              </span>
-              <span>{label}</span>
-            </NavLink>
-          ))}
+          <AdminWorkspaceNavigation
+            classPrefix="admin-users"
+            onNavigate={() => setMobileNavigationOpen(false)}
+          />
         </nav>
 
         <div className="admin-users-sidebar-footer">
@@ -907,6 +877,10 @@ function AdminUsers() {
           </div>
         </header>
 
+        {loading ? (
+          <AdminLoadingSkeleton label="Loading customers" stats={3} rows={5} />
+        ) : (
+          <>
         <section className="users-metrics-grid" aria-label="Customer security summary">
           <article className="users-metric-card">
             <span className="users-metric-icon">◎</span>
@@ -1084,9 +1058,11 @@ function AdminUsers() {
               )}
 
               {blockedPhonesLoading ? (
-                <p className="blocked-phone-empty" role="status">
-                  Loading blocked numbers...
-                </p>
+                <AdminLoadingSkeleton
+                  label="Loading blocked phone numbers"
+                  compact
+                  rows={3}
+                />
               ) : blockedPhonesError ? null : blockedPhones.length === 0 ? (
                 <p className="blocked-phone-empty">
                   There are no active blocked phone numbers.
@@ -1214,9 +1190,11 @@ function AdminUsers() {
           )}
 
           {restorationRequestsLoading ? (
-            <p className="blocked-phone-empty" role="status">
-              Loading restoration requests...
-            </p>
+            <AdminLoadingSkeleton
+              label="Loading restoration requests"
+              compact
+              rows={3}
+            />
           ) : restorationRequestsError ? null : restorationRequests.length === 0 ? (
             <p className="blocked-phone-empty">
               There are no recent phone restoration requests.
@@ -1645,6 +1623,8 @@ function AdminUsers() {
               })}
             </div>
           </section>
+        )}
+          </>
         )}
       </div>
       </div>

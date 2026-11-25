@@ -1108,13 +1108,15 @@
 
 .admin-users-brand-mark {
   display: grid;
-  width: 43px;
-  height: 43px;
+  width: 36px;
+  height: 36px;
   flex: 0 0 auto;
   place-items: center;
-  border-radius: 14px;
-  background: #eaf4ed;
-  font-size: 24px;
+  border-radius: 12px;
+  background: var(--color-primary);
+  color: var(--color-white);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.2rem;
 }
 
 .admin-users-brand > span:last-child {

@@ -17,7 +17,11 @@ const getLatestRequest = (requests) =>
   ) || requests[0] || null;
 
 function BlockedPhoneWarningModal() {
-  const { user, role, loading: authLoading } = useAuth();
+  const {
+    user,
+    role,
+    loading: authLoading = true,
+  } = useAuth() || {};
   const [blockedPhone, setBlockedPhone] = useState(null);
   const [restorationRequest, setRestorationRequest] = useState(null);
   const [statusLoading, setStatusLoading] = useState(false);

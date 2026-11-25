@@ -10,6 +10,7 @@ import { doc, getDoc } from "firebase/firestore";
 import "../styles/Login.css";
 import { login, signInWithGoogle } from "../services/authService";
 import { auth, db } from "../services/firebase";
+import { getEffectiveRole } from "../utils/userRole";
 
 function Login() {
   const navigate = useNavigate();
@@ -117,14 +118,19 @@ function Login() {
       }
 
       const userData = userSnapshot.data();
-      const userRole = userData.role;
+      const userRole = getEffectiveRole(userData);
 
       if (userRole === "admin") {
-        navigate("/admin/menu", { replace: true });
+        navigate("/admin/monthly-records", { replace: true });
         return;
       }
 
-      if (userRole === "voter") {
+      if (userRole === "staff") {
+        navigate("/admin/orders", { replace: true });
+        return;
+      }
+
+      if (userData.role === "voter") {
         navigate("/voter", { replace: true });
         return;
       }
@@ -161,12 +167,19 @@ function Login() {
       );
       const { profile } = await signInWithGoogle();
 
-      if (profile?.role === "admin") {
-        navigate("/admin/menu", { replace: true });
+      const userRole = getEffectiveRole(profile);
+
+      if (userRole === "admin") {
+        navigate("/admin/monthly-records", { replace: true });
         return;
       }
 
-      if (profile?.role === "customer") {
+      if (userRole === "staff") {
+        navigate("/admin/orders", { replace: true });
+        return;
+      }
+
+      if (userRole === "customer") {
         navigate("/menu", { replace: true });
         return;
       }

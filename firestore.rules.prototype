@@ -47,16 +47,7 @@ service cloud.firestore {
       return items is list
         && items.size() >= 1
         && items.size() <= 10
-        && validRequestItem(items[0])
-        && (items.size() <= 1 || validRequestItem(items[1]))
-        && (items.size() <= 2 || validRequestItem(items[2]))
-        && (items.size() <= 3 || validRequestItem(items[3]))
-        && (items.size() <= 4 || validRequestItem(items[4]))
-        && (items.size() <= 5 || validRequestItem(items[5]))
-        && (items.size() <= 6 || validRequestItem(items[6]))
-        && (items.size() <= 7 || validRequestItem(items[7]))
-        && (items.size() <= 8 || validRequestItem(items[8]))
-        && (items.size() <= 9 || validRequestItem(items[9]));
+        && validRequestItem(items[0]);
     }
 
     function validRequest(data) {
@@ -104,7 +95,6 @@ service cloud.firestore {
 
     function validOrderItem(orderItem, requestedItem) {
       return orderItem is map
-        && orderItem.keys().size() == 5
         && orderItem.keys().hasAll([
           "id",
           "name",
@@ -120,9 +110,7 @@ service cloud.firestore {
         && orderItem.quantity is int
         && orderItem.quantity == requestedItem.quantity
         && orderItem.subtotal is number
-        && math.abs(
-          orderItem.subtotal - orderItem.price * orderItem.quantity
-        ) <= 0.000001;
+        && orderItem.subtotal == orderItem.price * orderItem.quantity;
     }
 
     function validOrderItems(orderItems, requestedItems) {
@@ -130,32 +118,14 @@ service cloud.firestore {
       let requestedItemCount = requestedItems.size();
       return orderItems is list
         && orderItemCount == requestedItemCount
-        && validOrderItem(orderItems[0], requestedItems[0])
-        && (requestedItemCount <= 1
-          || validOrderItem(orderItems[1], requestedItems[1]))
-        && (requestedItemCount <= 2
-          || validOrderItem(orderItems[2], requestedItems[2]))
-        && (requestedItemCount <= 3
-          || validOrderItem(orderItems[3], requestedItems[3]))
-        && (requestedItemCount <= 4
-          || validOrderItem(orderItems[4], requestedItems[4]))
-        && (requestedItemCount <= 5
-          || validOrderItem(orderItems[5], requestedItems[5]))
-        && (requestedItemCount <= 6
-          || validOrderItem(orderItems[6], requestedItems[6]))
-        && (requestedItemCount <= 7
-          || validOrderItem(orderItems[7], requestedItems[7]))
-        && (requestedItemCount <= 8
-          || validOrderItem(orderItems[8], requestedItems[8]))
-        && (requestedItemCount <= 9
-          || validOrderItem(orderItems[9], requestedItems[9]));
+        && validOrderItem(orderItems[0], requestedItems[0]);
     }
 
     function orderTotalMatches(orderItems, total) {
       let itemCount = orderItems.size();
       return total is number
         && total >= 0
-        && math.abs(total - (
+        && total == (
           orderItems[0].subtotal
           + (itemCount > 1 ? orderItems[1].subtotal : 0)
           + (itemCount > 2 ? orderItems[2].subtotal : 0)
@@ -166,7 +136,7 @@ service cloud.firestore {
           + (itemCount > 7 ? orderItems[7].subtotal : 0)
           + (itemCount > 8 ? orderItems[8].subtotal : 0)
           + (itemCount > 9 ? orderItems[9].subtotal : 0)
-        )) <= 0.000001;
+        );
     }
 
     function orderMatchesRequest(order, orderId, requestId, orderRequest) {

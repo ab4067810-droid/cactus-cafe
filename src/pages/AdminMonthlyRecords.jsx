@@ -8,7 +8,10 @@ import {
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { NavLink, useNavigate } from "react-router-dom";
 
+import AdminWorkspaceNavigation from "../components/AdminWorkspaceNavigation";
+import AdminLoadingSkeleton from "../components/AdminLoadingSkeleton";
 import { auth, db } from "../services/firebase";
+import { getEffectiveRole } from "../utils/userRole";
 import "../styles/AdminReviews.css";
 import "../styles/AdminMonthlyRecords.css";
 import "../styles/AdminSidebar.css";
@@ -147,9 +150,14 @@ function AdminMonthlyRecords() {
           return;
         }
 
-        if (userSnapshot.data().role !== "admin") {
+        const userRole = getEffectiveRole(userSnapshot.data());
+
+        if (userRole !== "admin") {
           alert("Access denied. Admin account required.");
-          navigate("/customer", { replace: true });
+          navigate(
+            userRole === "staff" ? "/admin/orders" : "/menu",
+            { replace: true },
+          );
           return;
         }
 
@@ -257,18 +265,6 @@ function AdminMonthlyRecords() {
     }
   };
 
-  if (loading) {
-    return (
-      <main className="admin-reviews-page admin-monthly-records-page">
-        <section className="monthly-records-loading">
-          <p className="admin-reviews-eyebrow">CACTUS CAFE</p>
-          <h1>Loading monthly records</h1>
-          <div className="monthly-records-loading-bar" />
-        </section>
-      </main>
-    );
-  }
-
   const monthLabel = getMonthLabel(selectedMonth);
 
   return (
@@ -289,12 +285,12 @@ function AdminMonthlyRecords() {
         aria-label="Admin navigation"
       >
         <NavLink
-          to="/admin/menu"
+          to="/admin/monthly-records"
           className="admin-reviews-brand"
           onClick={() => setMobileNavigationOpen(false)}
         >
           <span className="admin-reviews-brand-mark" aria-hidden="true">
-            🌵
+            C
           </span>
           <span>
             <strong>Cactus Café</strong>
@@ -304,30 +300,10 @@ function AdminMonthlyRecords() {
 
         <div className="admin-reviews-sidebar-label">WORKSPACE</div>
         <nav className="admin-reviews-nav">
-          {[
-            ["▦", "Menu Management", "/admin/menu"],
-            ["↗", "Orders", "/admin/orders"],
-            ["₱", "Payment Management", "/admin/payments"],
-            ["◷", "Reservations", "/admin/reservations"],
-            ["☆", "Reviews", "/admin/reviews"],
-            ["◎", "Customers & Security", "/admin/users"],
-            ["▤", "Monthly Records", "/admin/monthly-records"],
-          ].map(([icon, label, to]) => (
-            <NavLink
-              key={to}
-              to={to}
-              end
-              className={({ isActive }) =>
-                `admin-reviews-nav-link${isActive ? " active" : ""}`
-              }
-              onClick={() => setMobileNavigationOpen(false)}
-            >
-              <span className="admin-reviews-nav-icon" aria-hidden="true">
-                {icon}
-              </span>
-              <span>{label}</span>
-            </NavLink>
-          ))}
+          <AdminWorkspaceNavigation
+            classPrefix="admin-reviews"
+            onNavigate={() => setMobileNavigationOpen(false)}
+          />
         </nav>
 
         <div className="admin-reviews-sidebar-footer">
@@ -379,6 +355,10 @@ function AdminMonthlyRecords() {
             </div>
           </header>
 
+          {loading ? (
+            <AdminLoadingSkeleton label="Loading monthly records" stats={4} rows={6} />
+          ) : (
+            <>
           <header className="monthly-records-print-header">
             <p>CACTUS CAFÉ</p>
             <h1>Cactus Café — Monthly Order &amp; Sales Report</h1>
@@ -594,6 +574,8 @@ function AdminMonthlyRecords() {
               <small>Authorized signature</small>
             </div>
           </section>
+            </>
+          )}
         </div>
       </div>
     </main>
